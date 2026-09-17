@@ -121,7 +121,16 @@ def build_agents() -> tuple[Agent, Agent]:
     return agent_a, agent_b
 
 
+def force_utf8_output() -> None:
+    """Windows consoles default to a legacy codepage (e.g. cp950), which raises
+    UnicodeEncodeError on CJK debate text. Print as UTF-8 instead."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def run_debate(question: str, max_rounds: int, min_rounds: int) -> dict:
+    force_utf8_output()
     agent_a, agent_b = build_agents()
     transcript: list[tuple[str, str]] = []
     rounds_run = 0
