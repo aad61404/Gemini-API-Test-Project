@@ -97,10 +97,18 @@ class Agent:
         return self.chat(messages)
 
 
+MARKER_RE = re.compile(r"\[(CONVERGED|OPEN)\]")
+
+
 def split_marker(text: str) -> tuple[str, bool]:
-    """Strip the trailing convergence marker; report whether it was [CONVERGED]."""
-    converged = bool(re.search(rf"{re.escape(CONVERGED)}\s*$", text))
-    body = re.sub(r"(\[CONVERGED\]|\[OPEN\])\s*$", "", text).strip()
+    """Strip the convergence marker and report whether the verdict was CONVERGED.
+
+    The marker is meant to end the turn, but models put it at the top just as
+    often, so look anywhere and let the last one win.
+    """
+    found = MARKER_RE.findall(text)
+    converged = bool(found) and found[-1] == "CONVERGED"
+    body = MARKER_RE.sub("", text).strip()
     return body, converged
 
 

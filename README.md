@@ -52,6 +52,14 @@ python local_debate.py "遠距工作對軟體團隊的生產力是利大於弊�
 - `--min-rounds N` 至少跑幾輪才允許提前收斂（預設 2）
 - `--save` 把完整記錄存成 `transcripts/debate-<時間>.json`
 
+## 測試
+
+不需要 API key 也能跑（標記解析與收斂規則）：
+
+```bash
+python -m unittest test_debate -v
+```
+
 ## 注意
 
 `.env` 與 `transcripts/` 已列入 `.gitignore`，不會被 commit。
