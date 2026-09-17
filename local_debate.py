@@ -46,6 +46,13 @@ Write the integrated conclusion, in the language of the original question:
 
 Do not invent agreement that is not in the transcript."""
 
+VERDICT_PROMPT = """Based on your immediately preceding answer, is any material
+disagreement still unresolved?
+
+Reply with exactly one token and nothing else:
+[CONVERGED] - no material disagreement remains
+[OPEN]      - a material disagreement remains"""
+
 
 @dataclass
 class Agent:
@@ -94,22 +101,61 @@ class Agent:
             prefix = "" if role == "assistant" else f"{speaker} said:\n"
             messages.append({"role": role, "content": prefix + text})
 
-        return self.chat(messages)
+        answer = self.chat(messages)
+        body, verdict = split_marker(answer)
+        if verdict is None:
+            verdict = self.ask_verdict(messages, answer)
+        return body, verdict
+
+    def ask_verdict(self, messages: list[dict], answer: str) -> bool | None:
+        """Ask only for the verdict when the turn arrived without a marker.
+
+        Small local models argue fine but drop the format instruction often.
+        Re-asking for a single token is far cheaper than regenerating the whole
+        turn, and temperature 0 keeps it deterministic.
+        """
+        probe = messages + [
+            {"role": "assistant", "content": answer},
+            {"role": "user", "content": VERDICT_PROMPT},
+        ]
+        try:
+            reply = self.chat(probe, temperature=0)
+        except RuntimeError as exc:
+            print(f"  ! {self.name}: verdict probe failed ({exc})", file=sys.stderr)
+            return None
+
+        _, verdict = split_marker(reply)
+        if verdict is None:
+            # The probe answer is a single token, so it may lack the line
+            # framing split_marker insists on. Accept it only if unambiguous.
+            upper = reply.upper()
+            has_c, has_o = "[CONVERGED]" in upper, "[OPEN]" in upper
+            if has_c != has_o:
+                verdict = has_c
+        if verdict is None:
+            print(f"  ! {self.name}: no verdict after probe; treating as open", file=sys.stderr)
+        return verdict
 
 
-MARKER_RE = re.compile(r"\[(CONVERGED|OPEN)\]")
+# The marker must stand alone on its own line. Models put it at the top as
+# often as the bottom, so it is not anchored to the end -- but an inline
+# mention ("last round I wrote [CONVERGED], however...") is prose, not a
+# verdict, and must not be read as one.
+MARKER_RE = re.compile(r"(?m)^[ \t]*\[(CONVERGED|OPEN)\][ \t]*$")
 
 
-def split_marker(text: str) -> tuple[str, bool]:
-    """Strip the convergence marker and report whether the verdict was CONVERGED.
+def split_marker(text: str) -> tuple[str, bool | None]:
+    """Strip the verdict marker and report it.
 
-    The marker is meant to end the turn, but models put it at the top just as
-    often, so look anywhere and let the last one win.
+    Returns (body, verdict) where verdict is True for [CONVERGED], False for
+    [OPEN], and None when the model gave no parseable verdict at all -- the
+    caller decides what to do about that, since "no verdict" and "not
+    converged" are different situations.
     """
     found = MARKER_RE.findall(text)
-    converged = bool(found) and found[-1] == "CONVERGED"
+    verdict = (found[-1] == "CONVERGED") if found else None
     body = MARKER_RE.sub("", text).strip()
-    return body, converged
+    return body, verdict
 
 
 def build_agents() -> tuple[Agent, Agent]:
@@ -147,7 +193,6 @@ def force_utf8_output() -> None:
 
 
 def run_debate(question: str, max_rounds: int, min_rounds: int) -> dict:
-    force_utf8_output()
     agent_a, agent_b = build_agents()
     transcript: list[tuple[str, str]] = []
     rounds_run = 0
@@ -158,10 +203,11 @@ def run_debate(question: str, max_rounds: int, min_rounds: int) -> dict:
         print(f"\n{'=' * 60}\nRound {rnd}/{max_rounds}\n{'=' * 60}")
 
         for agent in (agent_a, agent_b):
-            raw = agent.speak(question, transcript)
-            body, agent.converged = split_marker(raw)
+            body, verdict = agent.speak(question, transcript)
+            # No verdict means no verdict -- never let that end the debate.
+            agent.converged = verdict is True
             transcript.append((agent.name, body))
-            flag = " [CONVERGED]" if agent.converged else ""
+            flag = {True: " [CONVERGED]", False: " [OPEN]", None: " [NO VERDICT]"}[verdict]
             print(f"\n--- {agent.name}{flag} ---\n{body}")
 
         # Convergence must be mutual and simultaneous, and only after a real
@@ -202,6 +248,10 @@ def run_debate(question: str, max_rounds: int, min_rounds: int) -> dict:
 
 
 def main() -> None:
+    # Do this first, before anything can print: on Windows even a traceback
+    # containing CJK text will die on the console's legacy codepage.
+    force_utf8_output()
+
     parser = argparse.ArgumentParser(description="Two AI agents debate a question.")
     parser.add_argument("question", help="the question to debate")
     parser.add_argument("--rounds", type=int, default=4, help="maximum rounds (default: 4)")
