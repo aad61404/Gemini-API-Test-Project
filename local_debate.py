@@ -57,7 +57,34 @@ class Agent:
     converged: bool = False
     _history: list[dict] = field(default_factory=list)
 
-    def speak(self, question: str, transcript: list[tuple[str, str]], retries: int = 3) -> str:
+    def chat(self, messages: list[dict], temperature: float = 0.7, retries: int = 3) -> str:
+        """Call the model, retrying only errors that a retry could actually fix."""
+        last_error: Exception | None = None
+        for attempt in range(retries):
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    timeout=120,
+                )
+                content = (resp.choices[0].message.content or "").strip()
+                if content:
+                    return content
+                last_error = RuntimeError("empty response")
+            except OpenAIError as exc:
+                status = getattr(exc, "status_code", None)
+                # 404 (bad model name) or 401/403 (bad key) will never succeed
+                # on retry; fail fast instead of burning three attempts.
+                if status is not None and status not in (408, 429) and status < 500:
+                    raise RuntimeError(f"{self.name}: {exc}") from exc
+                last_error = exc
+            wait = 2 ** attempt
+            print(f"  ! {self.name} failed ({last_error}); retrying in {wait}s", file=sys.stderr)
+            time.sleep(wait)
+        raise RuntimeError(f"{self.name} failed after {retries} attempts: {last_error}")
+
+    def speak(self, question: str, transcript: list[tuple[str, str]]) -> str:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT.format(name=self.name, converged=CONVERGED)},
             {"role": "user", "content": f"The question under debate:\n\n{question}"},
@@ -67,25 +94,7 @@ class Agent:
             prefix = "" if role == "assistant" else f"{speaker} said:\n"
             messages.append({"role": role, "content": prefix + text})
 
-        last_error: Exception | None = None
-        for attempt in range(retries):
-            try:
-                resp = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=0.7,
-                    timeout=120,
-                )
-                content = (resp.choices[0].message.content or "").strip()
-                if content:
-                    return content
-                last_error = RuntimeError("empty response")
-            except OpenAIError as exc:
-                last_error = exc
-            wait = 2 ** attempt
-            print(f"  ! {self.name} failed ({last_error}); retrying in {wait}s", file=sys.stderr)
-            time.sleep(wait)
-        raise RuntimeError(f"{self.name} failed after {retries} attempts: {last_error}")
+        return self.chat(messages)
 
 
 def split_marker(text: str) -> tuple[str, bool]:
@@ -108,7 +117,7 @@ def build_agents() -> tuple[Agent, Agent]:
             api_key=gemini_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         ),
-        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
     )
     agent_b = Agent(
         name="Agent-B (Local)",
@@ -156,16 +165,22 @@ def run_debate(question: str, max_rounds: int, min_rounds: int) -> dict:
 
     print(f"\n{'=' * 60}\nSummary\n{'=' * 60}")
     body = "\n\n".join(f"{speaker}:\n{text}" for speaker, text in transcript)
-    summary = agent_a.client.chat.completions.create(
-        model=agent_a.model,
-        messages=[
-            {"role": "system", "content": SUMMARY_PROMPT},
-            {"role": "user", "content": f"Question: {question}\n\n{body}"},
-        ],
-        temperature=0.3,
-        timeout=120,
-    ).choices[0].message.content
-    print(summary)
+    messages = [
+        {"role": "system", "content": SUMMARY_PROMPT},
+        {"role": "user", "content": f"Question: {question}\n\n{body}"},
+    ]
+    try:
+        summary = agent_a.chat(messages, temperature=0.3)
+    except RuntimeError as exc:
+        # A debate is expensive; never throw the transcript away because the
+        # final summarising call happened to fail. Fall back to Agent B.
+        print(f"  ! summary via {agent_a.name} failed ({exc}); trying {agent_b.name}", file=sys.stderr)
+        try:
+            summary = agent_b.chat(messages, temperature=0.3)
+        except RuntimeError as exc2:
+            print(f"  ! summary failed on both agents ({exc2}); transcript kept", file=sys.stderr)
+            summary = None
+    print(summary if summary else "(summary unavailable)")
 
     return {
         "question": question,
