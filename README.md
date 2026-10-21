@@ -1,5 +1,7 @@
 # Gemini-API-Test-Project
 
+[![tests](https://github.com/aad61404/Gemini-API-Test-Project/actions/workflows/tests.yml/badge.svg)](https://github.com/aad61404/Gemini-API-Test-Project/actions/workflows/tests.yml)
+
 兩個 AI agent 針對同一個問題互相辯論，最後收斂出一個整合結論。
 一個 multi-agent 架構的入門練習專案。
 
