@@ -150,6 +150,15 @@ class TestConvergence(unittest.TestCase):
         r = self.run_debate([True] * 4, [True] * 4)
         self.assertEqual((r["rounds_run"], r["converged_at"]), (2, 2))
 
+    def test_saved_turns_carry_round_and_verdict(self):
+        ld.build_agents = lambda: (StubAgent("A", [False, True, True, True]),
+                                   StubAgent("B", [None, True, True, True]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False)
+        self.assertEqual([(t["round"], t["speaker"], t["verdict"]) for t in r["transcript"]],
+                         [(1, "A", False), (1, "B", None),
+                          (2, "A", True), (2, "B", True)])
+
     def test_failure_midway_keeps_the_rounds_already_done(self):
         class Failing(StubAgent):
             def speak(self, question, transcript):

@@ -290,7 +290,11 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
     if check:
         print("Checking both agents are reachable...")
         preflight((agent_a, agent_b))
+    # `transcript` feeds the prompts; `turns` is the record that gets saved,
+    # and carries the per-turn verdict so convergence behaviour can be
+    # analysed after the fact.
     transcript: list[tuple[str, str]] = []
+    turns: list[dict] = []
     rulings: list[dict] = []
     rounds_run = 0
     converged_at: int | None = None
@@ -313,6 +317,8 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
             # No verdict means no verdict -- never let that end the debate.
             agent.converged = verdict is True
             transcript.append((agent.name, body))
+            turns.append({"round": rnd, "speaker": agent.name,
+                          "verdict": verdict, "text": body})
             flag = {True: " [CONVERGED]", False: " [OPEN]", None: " [NO VERDICT]"}[verdict]
             print(f"\n--- {agent.name}{flag} ---\n{body}")
 
@@ -338,9 +344,11 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
             # Put the objection back into the debate rather than silently
             # continuing, so the next round has something to answer.
             print(f"\n>>> Judge overruled the convergence: {note}")
-            transcript.append(("Judge", f"You both declared you were done, but this "
-                                        f"is still unresolved:\n{note}\n"
-                                        f"Address it directly."))
+            objection = (f"You both declared you were done, but this is still "
+                         f"unresolved:\n{note}\nAddress it directly.")
+            transcript.append(("Judge", objection))
+            turns.append({"round": rnd, "speaker": "Judge",
+                          "verdict": False, "text": objection})
             agent_a.converged = agent_b.converged = False
 
     if not transcript:
@@ -381,7 +389,7 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
         "model_b": agent_b.model,
         "rounds_run": rounds_run,
         "converged_at": converged_at,
-        "transcript": [{"speaker": s, "text": t} for s, t in transcript],
+        "transcript": turns,
         "judge_rulings": rulings,
         "summary": summary,
         "error": error,
