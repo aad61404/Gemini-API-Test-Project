@@ -46,6 +46,21 @@ Write the integrated conclusion, in the language of the original question:
 
 Do not invent agreement that is not in the transcript."""
 
+JUDGE_PROMPT = """You are judging a debate between two agents. They have both
+declared they are done. Your job is to check whether that is actually true.
+
+Answer in the language of the question.
+
+Be strict. They converged too early if any of this holds:
+- they agree on wording but still differ on what to actually do;
+- one side dropped an objection without it being answered;
+- they settled on "it depends" without saying what it depends on.
+
+Reply in exactly this shape:
+<one line naming the strongest unresolved point, or "none">
+[CONVERGED] - the disagreement really is resolved
+[OPEN]      - something material is still unresolved"""
+
 VERDICT_PROMPT = """Based on your immediately preceding answer, is any material
 disagreement still unresolved?
 
@@ -184,6 +199,47 @@ def build_agents() -> tuple[Agent, Agent]:
     return agent_a, agent_b
 
 
+def build_judge() -> Agent:
+    """A third opinion, deliberately not one of the debaters.
+
+    Reusing a debater as its own judge invites it to ratify its own position,
+    so the judge runs on a different model. It shares Agent A's endpoint only
+    because that is the one with more than one model available.
+    """
+    load_dotenv()
+    return Agent(
+        name="Judge",
+        client=OpenAI(
+            api_key=os.getenv("GEMINI_API_KEY", ""),
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        ),
+        model=os.getenv("JUDGE_MODEL", "gemini-3.5-flash"),
+    )
+
+
+def judge_convergence(judge: Agent, question: str,
+                      transcript: list[tuple[str, str]]) -> tuple[bool, str]:
+    """Return (agreed, note). On any failure, defer to the debaters."""
+    body = "\n\n".join(f"{speaker}:\n{text}" for speaker, text in transcript)
+    try:
+        reply = judge.chat(
+            [{"role": "system", "content": JUDGE_PROMPT},
+             {"role": "user", "content": f"Question: {question}\n\n{body}"}],
+            temperature=0,
+        )
+    except RuntimeError as exc:
+        print(f"  ! judge unavailable ({exc}); accepting the agents' own verdict",
+              file=sys.stderr, flush=True)
+        return True, ""
+
+    note, verdict = split_marker(reply)
+    if verdict is None:
+        print("  ! judge gave no verdict; accepting the agents' own verdict",
+              file=sys.stderr, flush=True)
+        return True, ""
+    return verdict, note.strip()
+
+
 def preflight(agents: tuple[Agent, ...]) -> None:
     """Check every agent answers before starting, so a misconfigured model
     fails in two seconds instead of halfway through a paid debate."""
@@ -228,12 +284,14 @@ def force_utf8_output() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
-def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = True) -> dict:
+def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = True,
+               judge: Agent | None = None) -> dict:
     agent_a, agent_b = build_agents()
     if check:
         print("Checking both agents are reachable...")
         preflight((agent_a, agent_b))
     transcript: list[tuple[str, str]] = []
+    rulings: list[dict] = []
     rounds_run = 0
     converged_at: int | None = None
     error: str | None = None
@@ -264,9 +322,26 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
         # Convergence must be mutual and simultaneous, and only after a real
         # exchange has happened -- otherwise one polite agent ends the debate.
         if rnd >= min_rounds and agent_a.converged and agent_b.converged:
-            converged_at = rnd
-            print(f"\n>>> Both agents converged in round {rnd}; ending early.")
-            break
+            if judge is None:
+                converged_at = rnd
+                print(f"\n>>> Both agents converged in round {rnd}; ending early.")
+                break
+
+            agreed, note = judge_convergence(judge, question, transcript)
+            rulings.append({"round": rnd, "agreed": agreed, "note": note})
+            if agreed:
+                converged_at = rnd
+                print(f"\n>>> Both agents converged in round {rnd} and the judge "
+                      f"agrees; ending early.")
+                break
+
+            # Put the objection back into the debate rather than silently
+            # continuing, so the next round has something to answer.
+            print(f"\n>>> Judge overruled the convergence: {note}")
+            transcript.append(("Judge", f"You both declared you were done, but this "
+                                        f"is still unresolved:\n{note}\n"
+                                        f"Address it directly."))
+            agent_a.converged = agent_b.converged = False
 
     if not transcript:
         return {
@@ -276,6 +351,7 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
             "rounds_run": rounds_run,
             "converged_at": None,
             "transcript": [],
+            "judge_rulings": rulings,
             "summary": None,
             "error": error,
         }
@@ -306,6 +382,7 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
         "rounds_run": rounds_run,
         "converged_at": converged_at,
         "transcript": [{"speaker": s, "text": t} for s, t in transcript],
+        "judge_rulings": rulings,
         "summary": summary,
         "error": error,
     }
@@ -321,6 +398,8 @@ def main() -> None:
     parser.add_argument("--rounds", type=int, default=4, help="maximum rounds (default: 4)")
     parser.add_argument("--min-rounds", type=int, default=2, help="rounds before convergence may end the debate")
     parser.add_argument("--save", action="store_true", help="write the transcript to transcripts/")
+    parser.add_argument("--judge", action="store_true",
+                        help="have a third model verify convergence before ending early")
     parser.add_argument("--check", action="store_true",
                         help="only check both agents are reachable, then exit")
     parser.add_argument("--no-check", dest="check_first", action="store_false",
@@ -336,7 +415,9 @@ def main() -> None:
     if not args.question:
         parser.error("a question is required (or use --check on its own)")
 
-    result = run_debate(args.question, args.rounds, args.min_rounds, check=args.check_first)
+    result = run_debate(args.question, args.rounds, args.min_rounds,
+                        check=args.check_first,
+                        judge=build_judge() if args.judge else None)
 
     # Save on request, and always save a partial debate -- the user did not
     # ask for a half-finished run, so they cannot have opted into keeping it.

@@ -177,6 +177,54 @@ class TestConvergence(unittest.TestCase):
         self.assertIsNone(r["summary"])
         self.assertEqual(r["error"], "boom")
 
+    def judge_saying(self, *replies):
+        class J(ld.Agent):
+            def __init__(self):
+                super().__init__("Judge", None, "stub")
+                self.calls = 0
+
+            def chat(inner, messages, temperature=0.7, retries=3):
+                reply = replies[min(inner.calls, len(replies) - 1)]
+                inner.calls += 1
+                if reply is None:
+                    raise RuntimeError("judge down")
+                return reply
+
+        return J()
+
+    def test_judge_can_veto_an_early_convergence(self):
+        # Agents agree from round 1; the judge rejects it once, then accepts.
+        judge = self.judge_saying("still unresolved: scope\n[OPEN]", "none\n[CONVERGED]")
+        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False, judge=judge)
+        self.assertEqual(r["converged_at"], 3, "round 2 was vetoed, round 3 accepted")
+        self.assertEqual([x["agreed"] for x in r["judge_rulings"]], [False, True])
+
+    def test_vetoed_objection_is_put_back_into_the_debate(self):
+        judge = self.judge_saying("you never defined 'small team'\n[OPEN]", "none\n[CONVERGED]")
+        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False, judge=judge)
+        judge_turns = [t for t in r["transcript"] if t["speaker"] == "Judge"]
+        self.assertEqual(len(judge_turns), 1)
+        self.assertIn("small team", judge_turns[0]["text"])
+
+    def test_unavailable_judge_defers_to_the_agents(self):
+        # A broken judge must not block a convergence the agents both declared.
+        judge = self.judge_saying(None)
+        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False, judge=judge)
+        self.assertEqual(r["converged_at"], 2)
+
+    def test_judge_without_a_verdict_defers_to_the_agents(self):
+        judge = self.judge_saying("I am not sure either way")
+        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False, judge=judge)
+        self.assertEqual(r["converged_at"], 2)
+
     def test_missing_verdict_never_ends_the_debate(self):
         # Fail safe: an unparseable verdict must not be read as agreement.
         r = self.run_debate([True] * 4, [None] * 4)
