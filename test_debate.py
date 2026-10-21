@@ -135,7 +135,7 @@ class TestConvergence(unittest.TestCase):
     def run_debate(self, a_script, b_script, max_rounds=4, min_rounds=2):
         ld.build_agents = lambda: (StubAgent("A", a_script), StubAgent("B", b_script))
         with contextlib.redirect_stdout(io.StringIO()):
-            return ld.run_debate("q", max_rounds, min_rounds)
+            return ld.run_debate("q", max_rounds, min_rounds, check=False)
 
     def test_both_converge_ends_early(self):
         r = self.run_debate([False, True, True, True], [False, True, True, True])
@@ -149,6 +149,33 @@ class TestConvergence(unittest.TestCase):
         # Both agree in round 1, but min_rounds=2 forces a real exchange first.
         r = self.run_debate([True] * 4, [True] * 4)
         self.assertEqual((r["rounds_run"], r["converged_at"]), (2, 2))
+
+    def test_failure_midway_keeps_the_rounds_already_done(self):
+        class Failing(StubAgent):
+            def speak(self, question, transcript):
+                if self.turn >= 2:
+                    raise RuntimeError("boom")
+                return super().speak(question, transcript)
+
+        ld.build_agents = lambda: (StubAgent("A", [False] * 4), Failing("B", [False] * 4))
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False)
+        self.assertEqual(r["error"], "boom")
+        # A spoke in rounds 1-3, B only in rounds 1-2 before failing.
+        self.assertEqual(len(r["transcript"]), 5)
+        self.assertEqual(r["rounds_run"], 3)
+
+    def test_failure_on_the_very_first_turn_returns_empty(self):
+        class Failing(StubAgent):
+            def speak(self, question, transcript):
+                raise RuntimeError("boom")
+
+        ld.build_agents = lambda: (Failing("A", []), StubAgent("B", [False] * 4))
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False)
+        self.assertEqual(r["transcript"], [])
+        self.assertIsNone(r["summary"])
+        self.assertEqual(r["error"], "boom")
 
     def test_missing_verdict_never_ends_the_debate(self):
         # Fail safe: an unparseable verdict must not be read as agreement.

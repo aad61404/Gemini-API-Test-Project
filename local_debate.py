@@ -236,18 +236,30 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
     transcript: list[tuple[str, str]] = []
     rounds_run = 0
     converged_at: int | None = None
+    error: str | None = None
 
     for rnd in range(1, max_rounds + 1):
         rounds_run = rnd
         print(f"\n{'=' * 60}\nRound {rnd}/{max_rounds}\n{'=' * 60}")
 
         for agent in (agent_a, agent_b):
-            body, verdict = agent.speak(question, transcript)
+            try:
+                body, verdict = agent.speak(question, transcript)
+            except RuntimeError as exc:
+                # Keep what the debate produced so far rather than discarding
+                # several rounds of work because one call failed.
+                error = str(exc)
+                print(f"\n!!! {agent.name} failed; stopping with {len(transcript)} "
+                      f"turn(s) kept\n    {exc}", file=sys.stderr, flush=True)
+                break
             # No verdict means no verdict -- never let that end the debate.
             agent.converged = verdict is True
             transcript.append((agent.name, body))
             flag = {True: " [CONVERGED]", False: " [OPEN]", None: " [NO VERDICT]"}[verdict]
             print(f"\n--- {agent.name}{flag} ---\n{body}")
+
+        if error:
+            break
 
         # Convergence must be mutual and simultaneous, and only after a real
         # exchange has happened -- otherwise one polite agent ends the debate.
@@ -255,6 +267,18 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
             converged_at = rnd
             print(f"\n>>> Both agents converged in round {rnd}; ending early.")
             break
+
+    if not transcript:
+        return {
+            "question": question,
+            "model_a": agent_a.model,
+            "model_b": agent_b.model,
+            "rounds_run": rounds_run,
+            "converged_at": None,
+            "transcript": [],
+            "summary": None,
+            "error": error,
+        }
 
     print(f"\n{'=' * 60}\nSummary\n{'=' * 60}")
     body = "\n\n".join(f"{speaker}:\n{text}" for speaker, text in transcript)
@@ -283,6 +307,7 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
         "converged_at": converged_at,
         "transcript": [{"speaker": s, "text": t} for s, t in transcript],
         "summary": summary,
+        "error": error,
     }
 
 
@@ -313,12 +338,18 @@ def main() -> None:
 
     result = run_debate(args.question, args.rounds, args.min_rounds, check=args.check_first)
 
-    if args.save:
+    # Save on request, and always save a partial debate -- the user did not
+    # ask for a half-finished run, so they cannot have opted into keeping it.
+    if (args.save or result["error"]) and result["transcript"]:
         out_dir = Path("transcripts")
         out_dir.mkdir(exist_ok=True)
-        path = out_dir / f"debate-{datetime.now():%Y%m%d-%H%M%S}.json"
+        suffix = "-partial" if result["error"] else ""
+        path = out_dir / f"debate-{datetime.now():%Y%m%d-%H%M%S}{suffix}.json"
         path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nSaved to {path}")
+
+    if result["error"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
