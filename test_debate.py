@@ -79,6 +79,41 @@ class TestVerdictProbe(unittest.TestCase):
         self.assertIsNone(verdict)
 
 
+class TestPreflight(unittest.TestCase):
+    class Reachable(ld.Agent):
+        def __init__(self, name="Agent-A (Gemini)"):
+            super().__init__(name, None, "stub")
+
+        def chat(self, messages, temperature=0.7, retries=3):
+            return "OK"
+
+    class Unreachable(ld.Agent):
+        def __init__(self, name="Agent-A (Gemini)"):
+            super().__init__(name, None, "missing-model")
+
+        def chat(self, messages, temperature=0.7, retries=3):
+            raise RuntimeError("404 model not found")
+
+    def test_all_reachable_returns(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            ld.preflight((self.Reachable(), self.Reachable("Agent-B (Local)")))
+
+    def test_unreachable_agent_exits_nonzero(self):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as cm:
+                ld.preflight((self.Reachable(), self.Unreachable("Agent-B (Local)")))
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_failure_names_the_broken_agent_and_model(self):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit):
+                # Not a "(Local)" agent, so this stays offline: no Ollama probe.
+                ld.preflight((self.Unreachable(),))
+        self.assertIn("missing-model", err.getvalue())
+        self.assertIn("404", err.getvalue())
+
+
 class StubAgent(ld.Agent):
     """Emits a scripted verdict per round instead of calling an API."""
 

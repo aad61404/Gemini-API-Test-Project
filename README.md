@@ -48,11 +48,19 @@ ollama pull qwen2.5:7b
 python local_debate.py "遠距工作對軟體團隊的生產力是利大於弊嗎？"
 ```
 
+先確認兩端都活著（兩秒，不花辯論的錢）：
+
+```bash
+python local_debate.py --check
+```
+
 常用參數：
 
 - `--rounds N` 最多幾輪（預設 4）
 - `--min-rounds N` 至少跑幾輪才允許提前收斂（預設 2）
 - `--save` 把完整記錄存成 `transcripts/debate-<時間>.json`
+- `--check` 只檢查兩個 agent 是否可連線後離開
+- `--no-check` 跳過開跑前的連線檢查
 
 ## 測試
 

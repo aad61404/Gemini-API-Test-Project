@@ -184,6 +184,42 @@ def build_agents() -> tuple[Agent, Agent]:
     return agent_a, agent_b
 
 
+def preflight(agents: tuple[Agent, ...]) -> None:
+    """Check every agent answers before starting, so a misconfigured model
+    fails in two seconds instead of halfway through a paid debate."""
+    broken = []
+    for agent in agents:
+        try:
+            agent.chat([{"role": "user", "content": "Reply with exactly: OK"}],
+                       temperature=0, retries=1)
+            print(f"  ok   {agent.name}: {agent.model}", flush=True)
+        except RuntimeError as exc:
+            print(f"  FAIL {agent.name}: {agent.model}\n       {exc}",
+                  file=sys.stderr, flush=True)
+            broken.append(agent)
+
+    if not broken:
+        return
+
+    # A missing local model is the common case and the fixable one, so say
+    # what is actually installed instead of only what is missing.
+    if any("Local" in a.name for a in broken):
+        try:
+            import json as _json
+            import urllib.request
+            base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+            tags = base.rsplit("/v1", 1)[0] + "/api/tags"
+            with urllib.request.urlopen(tags, timeout=5) as resp:
+                names = [m["name"] for m in _json.load(resp).get("models", [])]
+            print(f"\nOllama has: {', '.join(names) if names else '(no models)'}"
+                  f"\nSet OLLAMA_MODEL in .env to one of them, or run: ollama pull <model>",
+                  file=sys.stderr)
+        except Exception:
+            print("\nIs Ollama running? Start it, then: ollama list", file=sys.stderr)
+
+    sys.exit(1)
+
+
 def force_utf8_output() -> None:
     """Windows consoles default to a legacy codepage (e.g. cp950), which raises
     UnicodeEncodeError on CJK debate text. Print as UTF-8 instead."""
@@ -192,8 +228,11 @@ def force_utf8_output() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
-def run_debate(question: str, max_rounds: int, min_rounds: int) -> dict:
+def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = True) -> dict:
     agent_a, agent_b = build_agents()
+    if check:
+        print("Checking both agents are reachable...")
+        preflight((agent_a, agent_b))
     transcript: list[tuple[str, str]] = []
     rounds_run = 0
     converged_at: int | None = None
@@ -253,13 +292,26 @@ def main() -> None:
     force_utf8_output()
 
     parser = argparse.ArgumentParser(description="Two AI agents debate a question.")
-    parser.add_argument("question", help="the question to debate")
+    parser.add_argument("question", nargs="?", help="the question to debate")
     parser.add_argument("--rounds", type=int, default=4, help="maximum rounds (default: 4)")
     parser.add_argument("--min-rounds", type=int, default=2, help="rounds before convergence may end the debate")
     parser.add_argument("--save", action="store_true", help="write the transcript to transcripts/")
+    parser.add_argument("--check", action="store_true",
+                        help="only check both agents are reachable, then exit")
+    parser.add_argument("--no-check", dest="check_first", action="store_false",
+                        help="skip the pre-debate reachability check")
     args = parser.parse_args()
 
-    result = run_debate(args.question, args.rounds, args.min_rounds)
+    if args.check:
+        force_utf8_output()
+        preflight(build_agents())
+        print("Both agents reachable.")
+        return
+
+    if not args.question:
+        parser.error("a question is required (or use --check on its own)")
+
+    result = run_debate(args.question, args.rounds, args.min_rounds, check=args.check_first)
 
     if args.save:
         out_dir = Path("transcripts")
