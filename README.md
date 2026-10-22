@@ -69,6 +69,18 @@ python local_debate.py --check
 - `--judge` 由第三個模型查核收斂是否成立（多花一次呼叫，只在雙方自報收斂時觸發）
 - `--local-only` 兩個 agent 都跑本機 Ollama：不需要 API key、不耗任何額度
 
+## 讀取結果
+
+`transcripts/` 裡是 JSON（機器讀），要人看的話：
+
+```bash
+python show_debate.py              # 最近一場，渲染成 Markdown
+python show_debate.py --stats      # 只看每輪判定，不看論證內容
+python show_debate.py transcripts/debate-xxx.json -o debate.md
+```
+
+`--stats` 會列出每個 agent 的判定分布與逐輪序列，用來觀察「誰比較容易宣告收斂」。
+
 ## 測試
 
 不需要 API key 也能跑（標記解析與收斂規則）：

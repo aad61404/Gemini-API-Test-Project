@@ -10,6 +10,7 @@ import os
 import unittest
 
 import local_debate as ld
+import show_debate
 
 
 class TestSplitMarker(unittest.TestCase):
@@ -39,6 +40,56 @@ class TestSplitMarker(unittest.TestCase):
     def test_inline_mention_alone_yields_no_verdict(self):
         text = "You said [CONVERGED] but I disagree."
         self.assertEqual(ld.split_marker(text), (text, None))
+
+
+class TestShowDebate(unittest.TestCase):
+    DATA = {
+        "question": "q?",
+        "model_a": "model-a", "model_b": "model-b",
+        "rounds_run": 2, "converged_at": 2,
+        "judge_rulings": [
+            {"round": 1, "agreed": False, "note": "scope undefined", "ruled": True},
+            {"round": 2, "agreed": True, "note": "none", "ruled": True},
+        ],
+        "transcript": [
+            {"round": 1, "speaker": "Agent-A", "verdict": False, "text": "first"},
+            {"round": 1, "speaker": "Agent-B", "verdict": None, "text": "second"},
+            {"round": 2, "speaker": "Agent-A", "verdict": True, "text": "third"},
+        ],
+        "summary": "the summary",
+        "error": None,
+    }
+
+    def test_render_groups_by_round_and_labels_verdicts(self):
+        out = show_debate.render(self.DATA)
+        self.assertIn("## Round 1", out)
+        self.assertIn("## Round 2", out)
+        self.assertIn("_OPEN_", out)
+        self.assertIn("_no verdict_", out)
+        self.assertIn("converged in round 2", out)
+        self.assertIn("the summary", out)
+
+    def test_render_shows_judge_rulings(self):
+        out = show_debate.render(self.DATA)
+        self.assertIn("overruled: scope undefined", out)
+        self.assertIn("agreed: none", out)
+
+    def test_render_marks_a_judge_that_could_not_rule(self):
+        data = dict(self.DATA, judge_rulings=[
+            {"round": 1, "agreed": True, "note": "judge unavailable: 429", "ruled": False}])
+        self.assertIn("could not rule", show_debate.render(data))
+
+    def test_render_reports_a_partial_debate(self):
+        data = dict(self.DATA, converged_at=None, error="Agent-B: boom")
+        out = show_debate.render(data)
+        self.assertIn("without converging", out)
+        self.assertIn("Stopped early", out)
+
+    def test_stats_tallies_each_speaker(self):
+        out = show_debate.render_stats(self.DATA)
+        self.assertIn("Agent-A", out)
+        self.assertIn("OPEN 1", out)
+        self.assertIn("CONVERGED 1", out)
 
 
 class TestBuildAgents(unittest.TestCase):
