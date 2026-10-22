@@ -6,6 +6,7 @@ Run with:  python -m unittest test_debate -v
 
 import contextlib
 import io
+import os
 import unittest
 
 import local_debate as ld
@@ -38,6 +39,60 @@ class TestSplitMarker(unittest.TestCase):
     def test_inline_mention_alone_yields_no_verdict(self):
         text = "You said [CONVERGED] but I disagree."
         self.assertEqual(ld.split_marker(text), (text, None))
+
+
+class TestBuildAgents(unittest.TestCase):
+    """Guard the provider wiring: which side talks to which endpoint."""
+
+    def setUp(self):
+        # load_dotenv() must not pull the developer's own .env into these.
+        self._real_load = ld.load_dotenv
+        ld.load_dotenv = lambda *a, **k: None
+        self._env = {k: os.environ.get(k) for k in
+                     ("GEMINI_API_KEY", "GEMINI_MODEL", "OLLAMA_MODEL",
+                      "OLLAMA_MODEL_A", "OLLAMA_BASE_URL")}
+        for key in self._env:
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        ld.load_dotenv = self._real_load
+        for key, value in self._env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_default_puts_agent_a_on_gemini(self):
+        os.environ["GEMINI_API_KEY"] = "test-key"
+        os.environ["GEMINI_MODEL"] = "gemini-test"
+        os.environ["OLLAMA_MODEL"] = "local-test"
+        a, b = ld.build_agents()
+        self.assertEqual((a.model, b.model), ("gemini-test", "local-test"))
+        self.assertIn("googleapis.com", str(a.client.base_url))
+        self.assertIn("11434", str(b.client.base_url))
+
+    def test_local_only_needs_no_key_and_uses_ollama_for_both(self):
+        os.environ["OLLAMA_MODEL"] = "local-test"
+        a, b = ld.build_agents(local_only=True)
+        self.assertEqual((a.model, b.model), ("local-test", "local-test"))
+        for agent in (a, b):
+            self.assertIn("11434", str(agent.client.base_url))
+
+    def test_local_only_can_give_the_two_sides_different_models(self):
+        os.environ["OLLAMA_MODEL"] = "local-b"
+        os.environ["OLLAMA_MODEL_A"] = "local-a"
+        a, b = ld.build_agents(local_only=True)
+        self.assertEqual((a.model, b.model), ("local-a", "local-b"))
+
+    def test_missing_key_exits_and_mentions_the_escape_hatch(self):
+        with self.assertRaises(SystemExit) as cm:
+            ld.build_agents()
+        self.assertIn("--local-only", str(cm.exception))
+
+    def test_local_only_judge_stays_local(self):
+        os.environ["OLLAMA_MODEL"] = "local-test"
+        judge = ld.build_judge(local_only=True)
+        self.assertIn("11434", str(judge.client.base_url))
 
 
 class TestRetryAfter(unittest.TestCase):
