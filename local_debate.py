@@ -218,8 +218,14 @@ def build_judge() -> Agent:
 
 
 def judge_convergence(judge: Agent, question: str,
-                      transcript: list[tuple[str, str]]) -> tuple[bool, str]:
-    """Return (agreed, note). On any failure, defer to the debaters."""
+                      transcript: list[tuple[str, str]]) -> tuple[bool, str, bool]:
+    """Return (agreed, note, ruled).
+
+    When the judge cannot rule -- it errored, hit a quota, or answered without
+    a verdict -- the debate defers to the agents rather than stalling. That is
+    a degradation, not a ruling, so `ruled` says which happened; a silent
+    "agreed" would look exactly like the judge approving the convergence.
+    """
     body = "\n\n".join(f"{speaker}:\n{text}" for speaker, text in transcript)
     try:
         reply = judge.chat(
@@ -230,14 +236,14 @@ def judge_convergence(judge: Agent, question: str,
     except RuntimeError as exc:
         print(f"  ! judge unavailable ({exc}); accepting the agents' own verdict",
               file=sys.stderr, flush=True)
-        return True, ""
+        return True, f"judge unavailable: {exc}", False
 
     note, verdict = split_marker(reply)
     if verdict is None:
         print("  ! judge gave no verdict; accepting the agents' own verdict",
               file=sys.stderr, flush=True)
-        return True, ""
-    return verdict, note.strip()
+        return True, "judge gave no verdict", False
+    return verdict, note.strip(), True
 
 
 def preflight(agents: tuple[Agent, ...]) -> None:
@@ -333,12 +339,13 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
                 print(f"\n>>> Both agents converged in round {rnd}; ending early.")
                 break
 
-            agreed, note = judge_convergence(judge, question, transcript)
-            rulings.append({"round": rnd, "agreed": agreed, "note": note})
+            agreed, note, ruled = judge_convergence(judge, question, transcript)
+            rulings.append({"round": rnd, "agreed": agreed, "note": note,
+                            "ruled": ruled})
             if agreed:
                 converged_at = rnd
-                print(f"\n>>> Both agents converged in round {rnd} and the judge "
-                      f"agrees; ending early.")
+                why = "and the judge agrees" if ruled else f"but {note}"
+                print(f"\n>>> Both agents converged in round {rnd} {why}; ending early.")
                 break
 
             # Put the objection back into the debate rather than silently

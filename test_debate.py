@@ -227,6 +227,25 @@ class TestConvergence(unittest.TestCase):
             r = ld.run_debate("q", 4, 2, check=False, judge=judge)
         self.assertEqual(r["converged_at"], 2)
 
+    def test_an_unavailable_judge_is_recorded_as_not_having_ruled(self):
+        # Otherwise a quota-exhausted judge is indistinguishable in the saved
+        # record from one that approved the convergence.
+        judge = self.judge_saying(None)
+        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False, judge=judge)
+        ruling = r["judge_rulings"][0]
+        self.assertFalse(ruling["ruled"])
+        self.assertTrue(ruling["agreed"], "deferring to the agents, not blocking them")
+        self.assertIn("judge unavailable", ruling["note"])
+
+    def test_a_real_ruling_is_marked_as_ruled(self):
+        judge = self.judge_saying("none\n[CONVERGED]")
+        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False, judge=judge)
+        self.assertTrue(r["judge_rulings"][0]["ruled"])
+
     def test_judge_without_a_verdict_defers_to_the_agents(self):
         judge = self.judge_saying("I am not sure either way")
         ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
