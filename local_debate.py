@@ -194,33 +194,46 @@ def split_marker(text: str) -> tuple[str, bool | None]:
     return body, verdict
 
 
-def build_agents() -> tuple[Agent, Agent]:
+def ollama_client() -> OpenAI:
+    return OpenAI(
+        api_key="ollama",  # Ollama ignores this, but the SDK requires a value
+        base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+    )
+
+
+def build_agents(local_only: bool = False) -> tuple[Agent, Agent]:
+    """Agent A on Gemini and Agent B on Ollama, or both on Ollama.
+
+    The point of running the two sides on different providers is that the
+    local one has no quota, so --local-only keeps the project usable once the
+    free Gemini tier is spent for the day. Both agents then share one model,
+    which makes for a duller debate but a working one.
+    """
     load_dotenv()
+    local_model = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_key:
-        sys.exit("GEMINI_API_KEY is not set. Copy .env.example to .env and fill it in.")
+    if local_only:
+        agent_a = Agent(name="Agent-A (Local)", client=ollama_client(),
+                        model=os.getenv("OLLAMA_MODEL_A", local_model))
+    else:
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_key:
+            sys.exit("GEMINI_API_KEY is not set. Copy .env.example to .env and fill "
+                     "it in, or run with --local-only.")
+        agent_a = Agent(
+            name="Agent-A (Gemini)",
+            client=OpenAI(
+                api_key=gemini_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            ),
+            model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        )
 
-    agent_a = Agent(
-        name="Agent-A (Gemini)",
-        client=OpenAI(
-            api_key=gemini_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        ),
-        model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-    )
-    agent_b = Agent(
-        name="Agent-B (Local)",
-        client=OpenAI(
-            api_key="ollama",  # Ollama ignores this, but the SDK requires a value
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-        ),
-        model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
-    )
+    agent_b = Agent(name="Agent-B (Local)", client=ollama_client(), model=local_model)
     return agent_a, agent_b
 
 
-def build_judge() -> Agent:
+def build_judge(local_only: bool = False) -> Agent:
     """A third opinion, deliberately not one of the debaters.
 
     Reusing a debater as its own judge invites it to ratify its own position,
@@ -228,6 +241,13 @@ def build_judge() -> Agent:
     because that is the one with more than one model available.
     """
     load_dotenv()
+    if local_only:
+        # No second local model to fall back on, so the judge shares the
+        # debaters' model here. Weaker separation, but still a fresh context
+        # with no stake in either position.
+        return Agent(name="Judge", client=ollama_client(),
+                     model=os.getenv("JUDGE_MODEL_LOCAL",
+                                     os.getenv("OLLAMA_MODEL", "qwen2.5:7b")))
     return Agent(
         name="Judge",
         client=OpenAI(
@@ -314,8 +334,8 @@ def force_utf8_output() -> None:
 
 
 def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = True,
-               judge: Agent | None = None) -> dict:
-    agent_a, agent_b = build_agents()
+               judge: Agent | None = None, local_only: bool = False) -> dict:
+    agent_a, agent_b = build_agents(local_only)
     if check:
         print("Checking both agents are reachable...")
         preflight((agent_a, agent_b))
@@ -436,6 +456,8 @@ def main() -> None:
     parser.add_argument("--rounds", type=int, default=4, help="maximum rounds (default: 4)")
     parser.add_argument("--min-rounds", type=int, default=2, help="rounds before convergence may end the debate")
     parser.add_argument("--save", action="store_true", help="write the transcript to transcripts/")
+    parser.add_argument("--local-only", action="store_true",
+                        help="run both agents on Ollama; no API key, no quota")
     parser.add_argument("--judge", action="store_true",
                         help="have a third model verify convergence before ending early")
     parser.add_argument("--check", action="store_true",
@@ -446,7 +468,7 @@ def main() -> None:
 
     if args.check:
         force_utf8_output()
-        preflight(build_agents())
+        preflight(build_agents(args.local_only))
         print("Both agents reachable.")
         return
 
@@ -455,7 +477,8 @@ def main() -> None:
 
     result = run_debate(args.question, args.rounds, args.min_rounds,
                         check=args.check_first,
-                        judge=build_judge() if args.judge else None)
+                        judge=build_judge(args.local_only) if args.judge else None,
+                        local_only=args.local_only)
 
     # Save on request, and always save a partial debate -- the user did not
     # ask for a half-finished run, so they cannot have opted into keeping it.

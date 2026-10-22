@@ -67,6 +67,7 @@ python local_debate.py --check
 - `--check` 只檢查兩個 agent 是否可連線後離開
 - `--no-check` 跳過開跑前的連線檢查
 - `--judge` 由第三個模型查核收斂是否成立（多花一次呼叫，只在雙方自報收斂時觸發）
+- `--local-only` 兩個 agent 都跑本機 Ollama：不需要 API key、不耗任何額度
 
 ## 測試
 
@@ -105,6 +106,17 @@ python bench_verdict.py --runs 8
    不是一律唱反調。這就是 `--judge` 的價值。
 
 兩個案例缺一不可：只測 `open` 的話，一個「永遠回答 OPEN」的模型也能拿滿分。
+
+### 額度用完了怎麼辦
+
+這正是「兩側用不同供應商」的用意。免費額度耗盡時：
+
+```bash
+python local_debate.py "你的問題" --local-only
+```
+
+兩個 agent 都改走本機 Ollama，完全不需要 API key。代價是雙方同模型，
+辯論會比較平淡，但系統照常運作。`--judge` 也會一併改用本機模型。
 
 ### 免費額度
 

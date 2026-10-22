@@ -147,7 +147,7 @@ class StubAgent(ld.Agent):
 
 class TestConvergence(unittest.TestCase):
     def run_debate(self, a_script, b_script, max_rounds=4, min_rounds=2):
-        ld.build_agents = lambda: (StubAgent("A", a_script), StubAgent("B", b_script))
+        ld.build_agents = lambda *a, **k: (StubAgent("A", a_script), StubAgent("B", b_script))
         with contextlib.redirect_stdout(io.StringIO()):
             return ld.run_debate("q", max_rounds, min_rounds, check=False)
 
@@ -165,7 +165,7 @@ class TestConvergence(unittest.TestCase):
         self.assertEqual((r["rounds_run"], r["converged_at"]), (2, 2))
 
     def test_saved_turns_carry_round_and_verdict(self):
-        ld.build_agents = lambda: (StubAgent("A", [False, True, True, True]),
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [False, True, True, True]),
                                    StubAgent("B", [None, True, True, True]))
         with contextlib.redirect_stdout(io.StringIO()):
             r = ld.run_debate("q", 4, 2, check=False)
@@ -180,7 +180,7 @@ class TestConvergence(unittest.TestCase):
                     raise RuntimeError("boom")
                 return super().speak(question, transcript)
 
-        ld.build_agents = lambda: (StubAgent("A", [False] * 4), Failing("B", [False] * 4))
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [False] * 4), Failing("B", [False] * 4))
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             r = ld.run_debate("q", 4, 2, check=False)
         self.assertEqual(r["error"], "boom")
@@ -193,7 +193,7 @@ class TestConvergence(unittest.TestCase):
             def speak(self, question, transcript):
                 raise RuntimeError("boom")
 
-        ld.build_agents = lambda: (Failing("A", []), StubAgent("B", [False] * 4))
+        ld.build_agents = lambda *a, **k: (Failing("A", []), StubAgent("B", [False] * 4))
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             r = ld.run_debate("q", 4, 2, check=False)
         self.assertEqual(r["transcript"], [])
@@ -218,7 +218,7 @@ class TestConvergence(unittest.TestCase):
     def test_judge_can_veto_an_early_convergence(self):
         # Agents agree from round 1; the judge rejects it once, then accepts.
         judge = self.judge_saying("still unresolved: scope\n[OPEN]", "none\n[CONVERGED]")
-        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
         with contextlib.redirect_stdout(io.StringIO()):
             r = ld.run_debate("q", 4, 2, check=False, judge=judge)
         self.assertEqual(r["converged_at"], 3, "round 2 was vetoed, round 3 accepted")
@@ -226,7 +226,7 @@ class TestConvergence(unittest.TestCase):
 
     def test_vetoed_objection_is_put_back_into_the_debate(self):
         judge = self.judge_saying("you never defined 'small team'\n[OPEN]", "none\n[CONVERGED]")
-        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
         with contextlib.redirect_stdout(io.StringIO()):
             r = ld.run_debate("q", 4, 2, check=False, judge=judge)
         judge_turns = [t for t in r["transcript"] if t["speaker"] == "Judge"]
@@ -236,7 +236,7 @@ class TestConvergence(unittest.TestCase):
     def test_unavailable_judge_defers_to_the_agents(self):
         # A broken judge must not block a convergence the agents both declared.
         judge = self.judge_saying(None)
-        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             r = ld.run_debate("q", 4, 2, check=False, judge=judge)
         self.assertEqual(r["converged_at"], 2)
@@ -245,7 +245,7 @@ class TestConvergence(unittest.TestCase):
         # Otherwise a quota-exhausted judge is indistinguishable in the saved
         # record from one that approved the convergence.
         judge = self.judge_saying(None)
-        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             r = ld.run_debate("q", 4, 2, check=False, judge=judge)
         ruling = r["judge_rulings"][0]
@@ -255,14 +255,14 @@ class TestConvergence(unittest.TestCase):
 
     def test_a_real_ruling_is_marked_as_ruled(self):
         judge = self.judge_saying("none\n[CONVERGED]")
-        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
         with contextlib.redirect_stdout(io.StringIO()):
             r = ld.run_debate("q", 4, 2, check=False, judge=judge)
         self.assertTrue(r["judge_rulings"][0]["ruled"])
 
     def test_judge_without_a_verdict_defers_to_the_agents(self):
         judge = self.judge_saying("I am not sure either way")
-        ld.build_agents = lambda: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [True] * 4), StubAgent("B", [True] * 4))
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             r = ld.run_debate("q", 4, 2, check=False, judge=judge)
         self.assertEqual(r["converged_at"], 2)
