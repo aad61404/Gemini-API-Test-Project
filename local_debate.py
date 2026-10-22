@@ -69,6 +69,19 @@ Reply with exactly one token and nothing else:
 [OPEN]      - a material disagreement remains"""
 
 
+RETRY_DELAY_RE = re.compile(r"'?retryDelay'?:\s*'?(\d+)s", re.I)
+
+
+def retry_after(exc: Exception) -> int:
+    """Seconds the API asked us to wait, or 0 if it did not say.
+
+    Gemini reports this inside the error payload rather than in a header, so
+    it has to be read out of the message text.
+    """
+    match = RETRY_DELAY_RE.search(str(exc))
+    return int(match.group(1)) if match else 0
+
+
 @dataclass
 class Agent:
     """One debater: a name, a client, a model, and its convergence state."""
@@ -100,6 +113,14 @@ class Agent:
                 # on retry; fail fast instead of burning three attempts.
                 if status is not None and status not in (408, 429) and status < 500:
                     raise RuntimeError(f"{self.name}: {exc}") from exc
+                # A 429 is usually a per-minute rate limit, worth waiting out.
+                # A spent daily quota is also a 429, but the retry window is
+                # hours away, so backing off for seconds is pure waste.
+                if status == 429 and retry_after(exc) > 300:
+                    raise RuntimeError(
+                        f"{self.name}: daily quota exhausted for {self.model}; "
+                        f"retry in {retry_after(exc) // 60} min, or switch models "
+                        f"(the local agent is unaffected)") from exc
                 last_error = exc
             wait = 2 ** attempt
             print(f"  ! {self.name} failed ({last_error}); retrying in {wait}s", file=sys.stderr)
@@ -252,8 +273,10 @@ def preflight(agents: tuple[Agent, ...]) -> None:
     broken = []
     for agent in agents:
         try:
+            # Two attempts, not one: a sleeping Ollama refuses the first
+            # connection and is up by the time the retry lands.
             agent.chat([{"role": "user", "content": "Reply with exactly: OK"}],
-                       temperature=0, retries=1)
+                       temperature=0, retries=2)
             print(f"  ok   {agent.name}: {agent.model}", flush=True)
         except RuntimeError as exc:
             print(f"  FAIL {agent.name}: {agent.model}\n       {exc}",

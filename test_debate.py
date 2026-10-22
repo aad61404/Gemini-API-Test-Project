@@ -40,6 +40,20 @@ class TestSplitMarker(unittest.TestCase):
         self.assertEqual(ld.split_marker(text), (text, None))
 
 
+class TestRetryAfter(unittest.TestCase):
+    def test_reads_the_delay_gemini_buries_in_the_payload(self):
+        msg = ("Error code: 429 - [{'error': {'code': 429, 'details': "
+               "[{'@type': 'type.googleapis.com/google.rpc.RetryInfo', "
+               "'retryDelay': '17701s'}]}}]")
+        self.assertEqual(ld.retry_after(RuntimeError(msg)), 17701)
+
+    def test_short_rate_limit_delay(self):
+        self.assertEqual(ld.retry_after(RuntimeError("'retryDelay': '12s'")), 12)
+
+    def test_absent_delay_is_zero(self):
+        self.assertEqual(ld.retry_after(RuntimeError("Error code: 429")), 0)
+
+
 class ProbeAgent(ld.Agent):
     """Agent whose chat() replies are scripted, to exercise the verdict probe."""
 
