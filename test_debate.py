@@ -41,6 +41,22 @@ class TestSplitMarker(unittest.TestCase):
         text = "You said [CONVERGED] but I disagree."
         self.assertEqual(ld.split_marker(text), (text, None))
 
+    def test_marker_ending_a_sentence_counts(self):
+        # gemma3 does this: no line of its own, but unambiguously the verdict.
+        self.assertEqual(ld.split_marker("...and so it stands. [OPEN]"),
+                         ("...and so it stands.", False))
+
+    def test_trailing_marker_beats_an_earlier_inline_mention(self):
+        body, verdict = ld.split_marker(
+            "Earlier I said [CONVERGED], but no. [OPEN]")
+        self.assertFalse(verdict)
+        self.assertIn("[CONVERGED]", body, "the quoted one is prose, keep it")
+
+    def test_standalone_and_trailing_are_not_double_counted(self):
+        # A marker on its own final line matches both patterns.
+        self.assertEqual(ld.split_marker("argued it\n\n[CONVERGED]"),
+                         ("argued it", True))
+
 
 class TestShowDebate(unittest.TestCase):
     DATA = {
@@ -193,7 +209,8 @@ class TestVerdictProbe(unittest.TestCase):
         self.assertFalse(verdict)
 
     def test_ambiguous_probe_answer_yields_no_verdict(self):
-        agent = ProbeAgent(["argument", "maybe [CONVERGED] or maybe [OPEN]"])
+        # Both markers quoted mid-sentence, neither in a verdict position.
+        agent = ProbeAgent(["argument", "maybe [CONVERGED] or maybe [OPEN], hard to say"])
         with contextlib.redirect_stderr(io.StringIO()):
             _, verdict = agent.speak("q", [])
         self.assertIsNone(verdict)
@@ -248,6 +265,7 @@ class StubAgent(ld.Agent):
         return f"turn {self.turn} of {self.name}", verdict
 
     def chat(self, messages, temperature=0.7, retries=3):
+        self.calls += 1          # the summary goes through here
         return "(stub summary)"
 
 
@@ -269,6 +287,30 @@ class TestConvergence(unittest.TestCase):
         # Both agree in round 1, but min_rounds=2 forces a real exchange first.
         r = self.run_debate([True] * 4, [True] * 4)
         self.assertEqual((r["rounds_run"], r["converged_at"]), (2, 2))
+
+    def test_usage_counts_every_call_including_the_judge(self):
+        class Counting(StubAgent):
+            def speak(self, question, transcript):
+                self.calls += 1
+                return super().speak(question, transcript)
+
+        judge = self.judge_saying("none\n[CONVERGED]")
+        ld.build_agents = lambda *a, **k: (Counting("A", [True] * 4),
+                                           Counting("B", [True] * 4))
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = ld.run_debate("q", 4, 2, check=False, judge=judge)
+        # Two rounds each, plus the summary, which StubAgent.chat serves.
+        self.assertEqual(r["usage"]["agent_a"]["calls"], 3)
+        self.assertEqual(r["usage"]["agent_b"]["calls"], 2)
+        self.assertIn("judge", r["usage"])
+
+    def test_usage_is_present_without_a_judge(self):
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [False] * 4),
+                                           StubAgent("B", [False] * 4))
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = ld.run_debate("q", 1, 1, check=False)
+        self.assertNotIn("judge", r["usage"])
+        self.assertEqual(set(r["usage"]), {"agent_a", "agent_b"})
 
     def test_saved_turns_carry_round_and_verdict(self):
         ld.build_agents = lambda *a, **k: (StubAgent("A", [False, True, True, True]),

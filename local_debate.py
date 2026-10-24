@@ -90,19 +90,32 @@ class Agent:
     client: OpenAI
     model: str
     converged: bool = False
-    _history: list[dict] = field(default_factory=list)
+    # The free tier is metered in requests per day, not tokens, so the call
+    # count is the number that decides whether another debate will run.
+    calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    def usage(self) -> dict:
+        return {"model": self.model, "calls": self.calls,
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens}
 
     def chat(self, messages: list[dict], temperature: float = 0.7, retries: int = 3) -> str:
         """Call the model, retrying only errors that a retry could actually fix."""
         last_error: Exception | None = None
         for attempt in range(retries):
             try:
+                self.calls += 1
                 resp = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     temperature=temperature,
                     timeout=120,
                 )
+                if resp.usage:
+                    self.prompt_tokens += resp.usage.prompt_tokens or 0
+                    self.completion_tokens += resp.usage.completion_tokens or 0
                 content = (resp.choices[0].message.content or "").strip()
                 if content:
                     return content
@@ -173,11 +186,13 @@ class Agent:
         return verdict
 
 
-# The marker must stand alone on its own line. Models put it at the top as
-# often as the bottom, so it is not anchored to the end -- but an inline
-# mention ("last round I wrote [CONVERGED], however...") is prose, not a
-# verdict, and must not be read as one.
+# Two positions count as a verdict: a line holding nothing else, and the very
+# end of the message. Models use both -- some lead with the marker on its own
+# line, some end a sentence with it. Anywhere else it is prose quoting the
+# marker ("last round I wrote [CONVERGED], however...") and must not be read
+# as a verdict.
 MARKER_RE = re.compile(r"(?m)^[ \t]*\[(CONVERGED|OPEN)\][ \t]*$")
+TRAILING_MARKER_RE = re.compile(r"\[(CONVERGED|OPEN)\]\s*$")
 
 
 def split_marker(text: str) -> tuple[str, bool | None]:
@@ -188,10 +203,21 @@ def split_marker(text: str) -> tuple[str, bool | None]:
     caller decides what to do about that, since "no verdict" and "not
     converged" are different situations.
     """
-    found = MARKER_RE.findall(text)
-    verdict = (found[-1] == "CONVERGED") if found else None
-    body = MARKER_RE.sub("", text).strip()
-    return body, verdict
+    matches = list(MARKER_RE.finditer(text))
+    trailing = TRAILING_MARKER_RE.search(text)
+    if trailing and not any(m.start() == trailing.start() for m in matches):
+        matches.append(trailing)
+
+    if not matches:
+        return text.strip(), None
+
+    last = max(matches, key=lambda m: m.start())
+    verdict = last.group(1) == "CONVERGED"
+
+    body = text
+    for match in sorted(matches, key=lambda m: m.start(), reverse=True):
+        body = body[:match.start()] + body[match.end():]
+    return body.strip(), verdict
 
 
 def ollama_client() -> OpenAI:
@@ -411,6 +437,7 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
             "transcript": [],
             "judge_rulings": rulings,
             "summary": None,
+            "usage": {"agent_a": agent_a.usage(), "agent_b": agent_b.usage()},
             "error": error,
         }
 
@@ -433,6 +460,12 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
             summary = None
     print(summary if summary else "(summary unavailable)")
 
+    usage = {"agent_a": agent_a.usage(), "agent_b": agent_b.usage()}
+    if judge is not None:
+        usage["judge"] = judge.usage()
+    tally = "  ".join(f"{who}={u['calls']}" for who, u in usage.items())
+    print(f"\nAPI calls this run: {tally}")
+
     return {
         "question": question,
         "model_a": agent_a.model,
@@ -442,6 +475,7 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
         "transcript": turns,
         "judge_rulings": rulings,
         "summary": summary,
+        "usage": usage,
         "error": error,
     }
 
