@@ -147,22 +147,49 @@ class Agent:
                 "prompt_tokens": self.prompt_tokens,
                 "completion_tokens": self.completion_tokens}
 
-    def chat(self, messages: list[dict], temperature: float = 0.7, retries: int = 3) -> str:
+    def _complete(self, messages: list[dict], temperature: float) -> str:
+        resp = self.client.chat.completions.create(
+            model=self.model, messages=messages,
+            temperature=temperature, timeout=120,
+        )
+        self._record_usage(resp.usage)
+        return (resp.choices[0].message.content or "").strip()
+
+    def _stream(self, messages: list[dict], temperature: float) -> str:
+        """Print the answer as it arrives. A local 7B takes a minute a turn,
+        and a minute of blank screen looks like a hang."""
+        parts: list[str] = []
+        chunks = self.client.chat.completions.create(
+            model=self.model, messages=messages,
+            temperature=temperature, timeout=120,
+            stream=True, stream_options={"include_usage": True},
+        )
+        for chunk in chunks:
+            # The usage-bearing final chunk carries no choices.
+            self._record_usage(getattr(chunk, "usage", None))
+            if not chunk.choices:
+                continue
+            piece = chunk.choices[0].delta.content
+            if piece:
+                parts.append(piece)
+                print(piece, end="", flush=True)
+        print()
+        return "".join(parts).strip()
+
+    def _record_usage(self, usage) -> None:
+        if usage:
+            self.prompt_tokens += usage.prompt_tokens or 0
+            self.completion_tokens += usage.completion_tokens or 0
+
+    def chat(self, messages: list[dict], temperature: float = 0.7, retries: int = 3,
+             stream: bool = False) -> str:
         """Call the model, retrying only errors that a retry could actually fix."""
         last_error: Exception | None = None
         for attempt in range(retries):
             try:
                 self.calls += 1
-                resp = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    timeout=120,
-                )
-                if resp.usage:
-                    self.prompt_tokens += resp.usage.prompt_tokens or 0
-                    self.completion_tokens += resp.usage.completion_tokens or 0
-                content = (resp.choices[0].message.content or "").strip()
+                content = (self._stream(messages, temperature) if stream
+                           else self._complete(messages, temperature))
                 if content:
                     return content
                 last_error = RuntimeError("empty response")
@@ -187,7 +214,7 @@ class Agent:
         raise RuntimeError(f"{self.name} failed after {retries} attempts: {last_error}")
 
     def speak(self, question: str, transcript: list[tuple[str, str]],
-              window: int = 0) -> tuple[str, bool | None]:
+              window: int = 0, stream: bool = False) -> tuple[str, bool | None]:
         messages = [
             {"role": "system", "content": self.system_prompt()},
             {"role": "user", "content": f"The question under debate:\n\n{question}"},
@@ -197,7 +224,7 @@ class Agent:
             prefix = "" if role == "assistant" else f"{speaker} said:\n"
             messages.append({"role": role, "content": prefix + text})
 
-        answer = self.chat(messages)
+        answer = self.chat(messages, stream=stream)
         body, verdict = split_marker(answer)
         if verdict is None:
             verdict = self.ask_verdict(messages, answer)
@@ -447,7 +474,7 @@ def force_utf8_output() -> None:
 def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = True,
                judge: Agent | None = None, local_only: bool = False,
                stances: tuple[str, str] | bool | None = None,
-               window: int = 0) -> dict:
+               window: int = 0, stream: bool = False) -> dict:
     agent_a, agent_b = build_agents(local_only)
     if check:
         print("Checking both agents are reachable...")
@@ -475,8 +502,12 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
 
         for agent in (agent_a, agent_b):
             before = agent.prompt_tokens
+            if stream:
+                # The text arrives from the model, so the header has to go out
+                # ahead of it rather than wrapping it afterwards.
+                print(f"\n--- {agent.name} ---")
             try:
-                body, verdict = agent.speak(question, transcript, window)
+                body, verdict = agent.speak(question, transcript, window, stream)
             except RuntimeError as exc:
                 # Keep what the debate produced so far rather than discarding
                 # several rounds of work because one call failed.
@@ -492,8 +523,11 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
             turns.append({"round": rnd, "speaker": agent.name,
                           "verdict": verdict, "text": body,
                           "prompt_tokens": agent.prompt_tokens - before})
-            flag = {True: " [CONVERGED]", False: " [OPEN]", None: " [NO VERDICT]"}[verdict]
-            print(f"\n--- {agent.name}{flag} ---\n{body}")
+            flag = {True: "[CONVERGED]", False: "[OPEN]", None: "[NO VERDICT]"}[verdict]
+            if stream:
+                print(f"--- {agent.name} {flag} ---")
+            else:
+                print(f"\n--- {agent.name} {flag} ---\n{body}")
 
         if error:
             break
@@ -594,6 +628,8 @@ def main() -> None:
     parser.add_argument("--min-rounds", type=int, default=2,
                         help="rounds before convergence may end the debate")
     parser.add_argument("--save", action="store_true", help="write the transcript to transcripts/")
+    parser.add_argument("--stream", action="store_true",
+                        help="print each turn as the model writes it")
     parser.add_argument("--window", type=int, default=0, metavar="N",
                         help="only resend the opening and the last N turns "
                              "(default: 0, resend everything)")
@@ -630,7 +666,8 @@ def main() -> None:
                         judge=build_judge(args.local_only) if args.judge else None,
                         local_only=args.local_only,
                         stances=stances,
-                        window=args.window)
+                        window=args.window,
+                        stream=args.stream)
 
     # Save on request, and always save a partial debate -- the user did not
     # ask for a half-finished run, so they cannot have opted into keeping it.

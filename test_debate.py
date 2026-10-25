@@ -58,6 +58,54 @@ class TestSplitMarker(unittest.TestCase):
                          ("argued it", True))
 
 
+class TestStreaming(unittest.TestCase):
+    class Chunk:
+        """Minimal stand-in for an OpenAI streaming chunk."""
+
+        def __init__(self, text=None, usage=None):
+            self.usage = usage
+            if text is None:
+                self.choices = []
+            else:
+                delta = type("D", (), {"content": text})()
+                self.choices = [type("C", (), {"delta": delta})()]
+
+    def streaming_agent(self, pieces, usage=None):
+        chunks = [self.Chunk(p) for p in pieces]
+        if usage is not None:
+            chunks.append(self.Chunk(usage=usage))
+
+        class Client:
+            class chat:  # mirrors the SDK's shape
+                class completions:
+                    @staticmethod
+                    def create(**kwargs):
+                        assert kwargs.get("stream") is True
+                        return iter(chunks)
+
+        return ld.Agent("A", Client(), "m")
+
+    def test_streamed_pieces_are_joined(self):
+        agent = self.streaming_agent(["Hel", "lo ", "world\n[OPEN]"])
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            answer = agent.chat([], stream=True)
+        self.assertEqual(answer, "Hello world\n[OPEN]")
+        self.assertIn("Hello world", out.getvalue(), "it printed as it arrived")
+
+    def test_usage_from_the_final_chunk_is_counted(self):
+        usage = type("U", (), {"prompt_tokens": 11, "completion_tokens": 4})()
+        agent = self.streaming_agent(["hi"], usage=usage)
+        with contextlib.redirect_stdout(io.StringIO()):
+            agent.chat([], stream=True)
+        self.assertEqual((agent.prompt_tokens, agent.completion_tokens), (11, 4))
+
+    def test_a_stream_with_no_usage_chunk_still_works(self):
+        agent = self.streaming_agent(["hi"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(agent.chat([], stream=True), "hi")
+        self.assertEqual(agent.prompt_tokens, 0)
+
+
 class TestWindowed(unittest.TestCase):
     TURNS = [(f"S{i}", f"turn {i}") for i in range(8)]
 
@@ -83,7 +131,7 @@ class TestWindowed(unittest.TestCase):
         seen = {}
 
         class Recording(ld.Agent):
-            def chat(self, messages, temperature=0.7, retries=3):
+            def chat(self, messages, temperature=0.7, retries=3, **kwargs):
                 seen["messages"] = messages
                 return "said it\n[OPEN]"
 
@@ -128,10 +176,10 @@ class TestStances(unittest.TestCase):
 
     def test_a_failed_stance_generation_does_not_stop_the_debate(self):
         class NoStances(StubAgent):
-            def chat(self, messages, temperature=0.7, retries=3):
+            def chat(self, messages, temperature=0.7, retries=3, **kwargs):
                 if any("opposing positions" in m["content"] for m in messages):
                     raise RuntimeError("down")
-                return super().chat(messages, temperature, retries)
+                return super().chat(messages, temperature, retries, **kwargs)
 
         ld.build_agents = lambda *a, **k: (NoStances("A", [False] * 2),
                                            StubAgent("B", [False] * 2))
@@ -282,7 +330,7 @@ class ProbeAgent(ld.Agent):
         self.replies = replies
         self.calls = 0
 
-    def chat(self, messages, temperature=0.7, retries=3):
+    def chat(self, messages, temperature=0.7, retries=3, **kwargs):
         reply = self.replies[self.calls]
         self.calls += 1
         return reply
@@ -319,14 +367,14 @@ class TestPreflight(unittest.TestCase):
         def __init__(self, name="Agent-A (Gemini)"):
             super().__init__(name, None, "stub")
 
-        def chat(self, messages, temperature=0.7, retries=3):
+        def chat(self, messages, temperature=0.7, retries=3, **kwargs):
             return "OK"
 
     class Unreachable(ld.Agent):
         def __init__(self, name="Agent-A (Gemini)"):
             super().__init__(name, None, "missing-model")
 
-        def chat(self, messages, temperature=0.7, retries=3):
+        def chat(self, messages, temperature=0.7, retries=3, **kwargs):
             raise RuntimeError("404 model not found")
 
     def test_all_reachable_returns(self):
@@ -359,12 +407,12 @@ class StubAgent(ld.Agent):
         self.script = script
         self.turn = 0
 
-    def speak(self, question, transcript, window=0):
+    def speak(self, question, transcript, *args, **kwargs):
         verdict = self.script[self.turn]
         self.turn += 1
         return f"turn {self.turn} of {self.name}", verdict
 
-    def chat(self, messages, temperature=0.7, retries=3):
+    def chat(self, messages, temperature=0.7, retries=3, **kwargs):
         self.calls += 1          # the summary goes through here
         return "(stub summary)"
 
@@ -390,9 +438,9 @@ class TestConvergence(unittest.TestCase):
 
     def test_usage_counts_every_call_including_the_judge(self):
         class Counting(StubAgent):
-            def speak(self, question, transcript, window=0):
+            def speak(self, question, transcript, *args, **kwargs):
                 self.calls += 1
-                return super().speak(question, transcript, window)
+                return super().speak(question, transcript, *args, **kwargs)
 
         judge = self.judge_saying("none\n[CONVERGED]")
         ld.build_agents = lambda *a, **k: (Counting("A", [True] * 4),
@@ -423,10 +471,10 @@ class TestConvergence(unittest.TestCase):
 
     def test_failure_midway_keeps_the_rounds_already_done(self):
         class Failing(StubAgent):
-            def speak(self, question, transcript, window=0):
+            def speak(self, question, transcript, *args, **kwargs):
                 if self.turn >= 2:
                     raise RuntimeError("boom")
-                return super().speak(question, transcript, window)
+                return super().speak(question, transcript, *args, **kwargs)
 
         ld.build_agents = lambda *a, **k: (StubAgent("A", [False] * 4), Failing("B", [False] * 4))
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -438,7 +486,7 @@ class TestConvergence(unittest.TestCase):
 
     def test_failure_on_the_very_first_turn_returns_empty(self):
         class Failing(StubAgent):
-            def speak(self, question, transcript, window=0):
+            def speak(self, question, transcript, *args, **kwargs):
                 raise RuntimeError("boom")
 
         ld.build_agents = lambda *a, **k: (Failing("A", []), StubAgent("B", [False] * 4))

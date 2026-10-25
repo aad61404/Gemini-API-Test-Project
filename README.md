@@ -68,6 +68,7 @@ python local_debate.py --check
 - `--no-check` 跳過開跑前的連線檢查
 - `--judge` 由第三個模型查核收斂是否成立（多花一次呼叫，只在雙方自報收斂時觸發）
 - `--local-only` 兩個 agent 都跑本機 Ollama：不需要 API key、不耗任何額度
+- `--stream` 邊產生邊印出（本機模型一則要跑一分多鐘，否則畫面像當機）
 - `--window N` 每次只重送開場兩則與最近 N 則發言，中間略過（預設 0 = 全部重送）
 - `--stances` 讓兩個 agent 從對立立場開場（由 Agent A 依問題自動產生，多花一次呼叫）
 - `--stance-a` / `--stance-b` 自己指定開場立場（兩個要一起給）
