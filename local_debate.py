@@ -226,6 +226,13 @@ class Agent:
 
         answer = self.chat(messages, stream=stream)
         body, verdict = split_marker(answer)
+
+        if not transcript:
+            # The opening statement cannot be a convergence: nothing has been
+            # said yet to converge with. Models declare one anyway, so take
+            # the verdict as settled here instead of asking or believing it.
+            return body, False
+
         if verdict is None:
             verdict = self.ask_verdict(messages, answer)
         return body, verdict

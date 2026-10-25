@@ -339,26 +339,44 @@ class ProbeAgent(ld.Agent):
 class TestVerdictProbe(unittest.TestCase):
     def test_no_probe_when_marker_present(self):
         agent = ProbeAgent(["argument\n[OPEN]"])
-        body, verdict = agent.speak("q", [])
+        body, verdict = agent.speak("q", [("Other", "an opening argument")])
         self.assertEqual((body, verdict), ("argument", False))
         self.assertEqual(agent.calls, 1, "should not spend a second call")
 
+    def test_the_opening_statement_is_never_a_convergence(self):
+        # Nothing has been said yet to converge with, whatever the model says.
+        agent = ProbeAgent(["my position\n[CONVERGED]"])
+        body, verdict = agent.speak("q", [])
+        self.assertEqual((body, verdict), ("my position", False))
+
+    def test_the_opening_statement_does_not_pay_for_a_probe(self):
+        agent = ProbeAgent(["my position with no marker"])
+        _, verdict = agent.speak("q", [])
+        self.assertFalse(verdict)
+        self.assertEqual(agent.calls, 1, "no verdict probe for the opener")
+
+    def test_the_second_speaker_in_round_one_is_still_asked(self):
+        # Agent B has heard A, so its verdict means something.
+        agent = ProbeAgent(["replying\n[CONVERGED]"])
+        _, verdict = agent.speak("q", [("Other", "an opening argument")])
+        self.assertTrue(verdict)
+
     def test_probe_recovers_a_missing_marker(self):
         agent = ProbeAgent(["argument with no marker", "[CONVERGED]"])
-        body, verdict = agent.speak("q", [])
+        body, verdict = agent.speak("q", [("Other", "an opening argument")])
         self.assertEqual((body, verdict), ("argument with no marker", True))
         self.assertEqual(agent.calls, 2)
 
     def test_probe_accepts_an_unframed_token(self):
         agent = ProbeAgent(["argument", "My verdict is [OPEN]."])
-        _, verdict = agent.speak("q", [])
+        _, verdict = agent.speak("q", [("Other", "an opening argument")])
         self.assertFalse(verdict)
 
     def test_ambiguous_probe_answer_yields_no_verdict(self):
         # Both markers quoted mid-sentence, neither in a verdict position.
         agent = ProbeAgent(["argument", "maybe [CONVERGED] or maybe [OPEN], hard to say"])
         with contextlib.redirect_stderr(io.StringIO()):
-            _, verdict = agent.speak("q", [])
+            _, verdict = agent.speak("q", [("Other", "an opening argument")])
         self.assertIsNone(verdict)
 
 
