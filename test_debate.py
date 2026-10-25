@@ -58,6 +58,43 @@ class TestSplitMarker(unittest.TestCase):
                          ("argued it", True))
 
 
+class TestWindowed(unittest.TestCase):
+    TURNS = [(f"S{i}", f"turn {i}") for i in range(8)]
+
+    def test_zero_window_changes_nothing(self):
+        self.assertEqual(ld.windowed(self.TURNS, 0), self.TURNS)
+
+    def test_short_transcript_is_untouched(self):
+        self.assertEqual(ld.windowed(self.TURNS[:4], 4), self.TURNS[:4])
+
+    def test_keeps_the_opening_and_the_last_n(self):
+        out = ld.windowed(self.TURNS, 3)
+        self.assertEqual(out[:2], self.TURNS[:2], "both opening positions survive")
+        self.assertEqual(out[-3:], self.TURNS[-3:], "the live argument survives")
+        self.assertEqual(out[2], ("Narrator", ld.SKIPPED_NOTE))
+        self.assertEqual(len(out), 6)
+
+    def test_the_gap_is_announced_not_silent(self):
+        # An agent that cannot see a turn should at least know it existed.
+        out = ld.windowed(self.TURNS, 2)
+        self.assertTrue(any(speaker == "Narrator" for speaker, _ in out))
+
+    def test_window_is_applied_to_the_prompt(self):
+        seen = {}
+
+        class Recording(ld.Agent):
+            def chat(self, messages, temperature=0.7, retries=3):
+                seen["messages"] = messages
+                return "said it\n[OPEN]"
+
+        agent = Recording("A", None, "m")
+        agent.speak("q", self.TURNS, window=2)
+        rendered = " ".join(m["content"] for m in seen["messages"])
+        self.assertIn(ld.SKIPPED_NOTE, rendered)
+        self.assertNotIn("turn 4", rendered)
+        self.assertIn("turn 7", rendered)
+
+
 class TestStances(unittest.TestCase):
     def test_parses_two_labelled_lines(self):
         self.assertEqual(ld.split_stances("A: ship fast\nB: test first"),
@@ -322,7 +359,7 @@ class StubAgent(ld.Agent):
         self.script = script
         self.turn = 0
 
-    def speak(self, question, transcript):
+    def speak(self, question, transcript, window=0):
         verdict = self.script[self.turn]
         self.turn += 1
         return f"turn {self.turn} of {self.name}", verdict
@@ -353,9 +390,9 @@ class TestConvergence(unittest.TestCase):
 
     def test_usage_counts_every_call_including_the_judge(self):
         class Counting(StubAgent):
-            def speak(self, question, transcript):
+            def speak(self, question, transcript, window=0):
                 self.calls += 1
-                return super().speak(question, transcript)
+                return super().speak(question, transcript, window)
 
         judge = self.judge_saying("none\n[CONVERGED]")
         ld.build_agents = lambda *a, **k: (Counting("A", [True] * 4),
@@ -386,10 +423,10 @@ class TestConvergence(unittest.TestCase):
 
     def test_failure_midway_keeps_the_rounds_already_done(self):
         class Failing(StubAgent):
-            def speak(self, question, transcript):
+            def speak(self, question, transcript, window=0):
                 if self.turn >= 2:
                     raise RuntimeError("boom")
-                return super().speak(question, transcript)
+                return super().speak(question, transcript, window)
 
         ld.build_agents = lambda *a, **k: (StubAgent("A", [False] * 4), Failing("B", [False] * 4))
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -401,7 +438,7 @@ class TestConvergence(unittest.TestCase):
 
     def test_failure_on_the_very_first_turn_returns_empty(self):
         class Failing(StubAgent):
-            def speak(self, question, transcript):
+            def speak(self, question, transcript, window=0):
                 raise RuntimeError("boom")
 
         ld.build_agents = lambda *a, **k: (Failing("A", []), StubAgent("B", [False] * 4))

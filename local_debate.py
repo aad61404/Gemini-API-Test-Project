@@ -91,6 +91,23 @@ Reply with exactly one token and nothing else:
 [OPEN]      - a material disagreement remains"""
 
 
+SKIPPED_NOTE = "[earlier turns omitted to keep the prompt small]"
+
+
+def windowed(transcript: list[tuple[str, str]], window: int) -> list[tuple[str, str]]:
+    """Trim the middle of a long debate, keeping the ends that matter.
+
+    Resending everything makes the prompt grow every round. The opening turns
+    hold each side's original position and the recent ones hold the live
+    argument; the middle is what can go. Returns the transcript unchanged when
+    window is 0 or it already fits.
+    """
+    if window <= 0 or len(transcript) <= window + 2:
+        return transcript
+    opening, recent = transcript[:2], transcript[-window:]
+    return [*opening, ("Narrator", SKIPPED_NOTE), *recent]
+
+
 RETRY_DELAY_RE = re.compile(r"'?retryDelay'?:\s*'?(\d+)s", re.I)
 
 
@@ -169,12 +186,13 @@ class Agent:
             time.sleep(wait)
         raise RuntimeError(f"{self.name} failed after {retries} attempts: {last_error}")
 
-    def speak(self, question: str, transcript: list[tuple[str, str]]) -> str:
+    def speak(self, question: str, transcript: list[tuple[str, str]],
+              window: int = 0) -> tuple[str, bool | None]:
         messages = [
             {"role": "system", "content": self.system_prompt()},
             {"role": "user", "content": f"The question under debate:\n\n{question}"},
         ]
-        for speaker, text in transcript:
+        for speaker, text in windowed(transcript, window):
             role = "assistant" if speaker == self.name else "user"
             prefix = "" if role == "assistant" else f"{speaker} said:\n"
             messages.append({"role": role, "content": prefix + text})
@@ -428,7 +446,8 @@ def force_utf8_output() -> None:
 
 def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = True,
                judge: Agent | None = None, local_only: bool = False,
-               stances: tuple[str, str] | bool | None = None) -> dict:
+               stances: tuple[str, str] | bool | None = None,
+               window: int = 0) -> dict:
     agent_a, agent_b = build_agents(local_only)
     if check:
         print("Checking both agents are reachable...")
@@ -457,7 +476,7 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
         for agent in (agent_a, agent_b):
             before = agent.prompt_tokens
             try:
-                body, verdict = agent.speak(question, transcript)
+                body, verdict = agent.speak(question, transcript, window)
             except RuntimeError as exc:
                 # Keep what the debate produced so far rather than discarding
                 # several rounds of work because one call failed.
@@ -575,6 +594,9 @@ def main() -> None:
     parser.add_argument("--min-rounds", type=int, default=2,
                         help="rounds before convergence may end the debate")
     parser.add_argument("--save", action="store_true", help="write the transcript to transcripts/")
+    parser.add_argument("--window", type=int, default=0, metavar="N",
+                        help="only resend the opening and the last N turns "
+                             "(default: 0, resend everything)")
     parser.add_argument("--stances", action="store_true",
                         help="start the agents on opposing positions, generated "
                              "from the question")
@@ -607,7 +629,8 @@ def main() -> None:
                         check=args.check_first,
                         judge=build_judge(args.local_only) if args.judge else None,
                         local_only=args.local_only,
-                        stances=stances)
+                        stances=stances,
+                        window=args.window)
 
     # Save on request, and always save a partial debate -- the user did not
     # ask for a half-finished run, so they cannot have opted into keeping it.
