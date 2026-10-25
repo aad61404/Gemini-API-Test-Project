@@ -455,6 +455,7 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
         print(f"\n{'=' * 60}\nRound {rnd}/{max_rounds}\n{'=' * 60}")
 
         for agent in (agent_a, agent_b):
+            before = agent.prompt_tokens
             try:
                 body, verdict = agent.speak(question, transcript)
             except RuntimeError as exc:
@@ -467,8 +468,11 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
             # No verdict means no verdict -- never let that end the debate.
             agent.converged = verdict is True
             transcript.append((agent.name, body))
+            # Every turn resends the whole debate, so this grows with the
+            # round number. Recording it per turn is what makes that visible.
             turns.append({"round": rnd, "speaker": agent.name,
-                          "verdict": verdict, "text": body})
+                          "verdict": verdict, "text": body,
+                          "prompt_tokens": agent.prompt_tokens - before})
             flag = {True: " [CONVERGED]", False: " [OPEN]", None: " [NO VERDICT]"}[verdict]
             print(f"\n--- {agent.name}{flag} ---\n{body}")
 

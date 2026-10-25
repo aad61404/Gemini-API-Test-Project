@@ -86,6 +86,16 @@ def render_stats(data: dict) -> str:
     sequence = [f"r{t['round']}:{t['speaker'].split()[0]}="
                 f"{VERDICT_LABEL[t.get('verdict')][:4]}" for t in data["transcript"]]
     out += ["", "  " + "  ".join(sequence)]
+
+    # Each turn resends the whole debate so far, so the prompt grows every
+    # round. Worth seeing: it is the cost that scales with --rounds.
+    sized = [t for t in data["transcript"] if t.get("prompt_tokens")]
+    if sized:
+        out += ["", "  prompt tokens per turn:"]
+        for turn in sized:
+            bar = "#" * max(1, round(turn["prompt_tokens"] / 100))
+            out.append(f"    r{turn['round']} {turn['speaker']:17} "
+                       f"{turn['prompt_tokens']:6} {bar}")
     return "\n".join(out)
 
 
