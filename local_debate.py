@@ -37,6 +37,28 @@ Rules:
 Never write the {converged} marker before you have genuinely addressed the
 other agent's strongest objection."""
 
+STANCE_PROMPT = """
+Your assigned opening position:
+
+{stance}
+
+Argue this position at its strongest, and give the real reasons for it rather
+than a caricature. You are not required to hold it to the end: if the other
+agent answers your case, say so and concede that point. Abandoning a position
+you cannot defend is the debate working, not you losing it."""
+
+STANCE_SPLIT_PROMPT = """Give the two strongest opposing positions on this
+question, in the language of the question.
+
+Rules:
+- They must genuinely conflict: someone holding one would reject the other.
+- Each is one sentence, stating what to actually do and the core reason.
+- No hedging, no "it depends", no restating the question.
+
+Reply with exactly two lines and nothing else:
+A: <first position>
+B: <opposing position>"""
+
 SUMMARY_PROMPT = """Below is a debate transcript between two agents.
 
 Write the integrated conclusion, in the language of the original question:
@@ -95,6 +117,13 @@ class Agent:
     calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    stance: str | None = None
+
+    def system_prompt(self) -> str:
+        prompt = SYSTEM_PROMPT.format(name=self.name, converged=CONVERGED)
+        if self.stance:
+            prompt += "\n" + STANCE_PROMPT.format(stance=self.stance)
+        return prompt
 
     def usage(self) -> dict:
         return {"model": self.model, "calls": self.calls,
@@ -142,7 +171,7 @@ class Agent:
 
     def speak(self, question: str, transcript: list[tuple[str, str]]) -> str:
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT.format(name=self.name, converged=CONVERGED)},
+            {"role": "system", "content": self.system_prompt()},
             {"role": "user", "content": f"The question under debate:\n\n{question}"},
         ]
         for speaker, text in transcript:
@@ -313,6 +342,43 @@ def judge_convergence(judge: Agent, question: str,
     return verdict, note.strip(), True
 
 
+STANCE_LINE_RE = re.compile(r"(?mi)^\s*([AB])\s*[:：]\s*(.+?)\s*$")
+
+
+def split_stances(text: str) -> tuple[str, str] | None:
+    """Pull 'A: ...' and 'B: ...' out of the model's reply, or None."""
+    found = {label.upper(): body for label, body in STANCE_LINE_RE.findall(text)}
+    if "A" in found and "B" in found and found["A"] != found["B"]:
+        return found["A"], found["B"]
+    return None
+
+
+def assign_stances(author: Agent, question: str) -> tuple[str, str] | None:
+    """Ask for two genuinely opposing opening positions.
+
+    Left to themselves the agents tend to open near the same position and
+    spend the debate agreeing, which is the least useful thing two agents can
+    do. Starting them apart costs one call and gives the debate something to
+    actually resolve.
+    """
+    try:
+        reply = author.chat(
+            [{"role": "system", "content": STANCE_SPLIT_PROMPT},
+             {"role": "user", "content": question}],
+            temperature=0.4,
+        )
+    except RuntimeError as exc:
+        print(f"  ! could not generate stances ({exc}); debating unassigned",
+              file=sys.stderr, flush=True)
+        return None
+
+    stances = split_stances(reply)
+    if stances is None:
+        print("  ! stance reply was not two labelled lines; debating unassigned",
+              file=sys.stderr, flush=True)
+    return stances
+
+
 def preflight(agents: tuple[Agent, ...]) -> None:
     """Check every agent answers before starting, so a misconfigured model
     fails in two seconds instead of halfway through a paid debate."""
@@ -360,11 +426,19 @@ def force_utf8_output() -> None:
 
 
 def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = True,
-               judge: Agent | None = None, local_only: bool = False) -> dict:
+               judge: Agent | None = None, local_only: bool = False,
+               stances: tuple[str, str] | bool | None = None) -> dict:
     agent_a, agent_b = build_agents(local_only)
     if check:
         print("Checking both agents are reachable...")
         preflight((agent_a, agent_b))
+
+    if stances is True:
+        stances = assign_stances(agent_a, question)
+    if stances:
+        agent_a.stance, agent_b.stance = stances
+        print(f"\nOpening positions\n  A: {agent_a.stance}\n  B: {agent_b.stance}")
+
     # `transcript` feeds the prompts; `turns` is the record that gets saved,
     # and carries the per-turn verdict so convergence behaviour can be
     # analysed after the fact.
@@ -432,6 +506,8 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
             "question": question,
             "model_a": agent_a.model,
             "model_b": agent_b.model,
+            "stance_a": agent_a.stance,
+            "stance_b": agent_b.stance,
             "rounds_run": rounds_run,
             "converged_at": None,
             "transcript": [],
@@ -470,6 +546,8 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
         "question": question,
         "model_a": agent_a.model,
         "model_b": agent_b.model,
+        "stance_a": agent_a.stance,
+        "stance_b": agent_b.stance,
         "rounds_run": rounds_run,
         "converged_at": converged_at,
         "transcript": turns,
@@ -490,6 +568,11 @@ def main() -> None:
     parser.add_argument("--rounds", type=int, default=4, help="maximum rounds (default: 4)")
     parser.add_argument("--min-rounds", type=int, default=2, help="rounds before convergence may end the debate")
     parser.add_argument("--save", action="store_true", help="write the transcript to transcripts/")
+    parser.add_argument("--stances", action="store_true",
+                        help="start the agents on opposing positions, generated "
+                             "from the question")
+    parser.add_argument("--stance-a", help="give Agent A this opening position")
+    parser.add_argument("--stance-b", help="give Agent B this opening position")
     parser.add_argument("--local-only", action="store_true",
                         help="run both agents on Ollama; no API key, no quota")
     parser.add_argument("--judge", action="store_true",
@@ -509,10 +592,15 @@ def main() -> None:
     if not args.question:
         parser.error("a question is required (or use --check on its own)")
 
+    if bool(args.stance_a) != bool(args.stance_b):
+        parser.error("--stance-a and --stance-b must be given together")
+    stances = (args.stance_a, args.stance_b) if args.stance_a else args.stances
+
     result = run_debate(args.question, args.rounds, args.min_rounds,
                         check=args.check_first,
                         judge=build_judge(args.local_only) if args.judge else None,
-                        local_only=args.local_only)
+                        local_only=args.local_only,
+                        stances=stances)
 
     # Save on request, and always save a partial debate -- the user did not
     # ask for a half-finished run, so they cannot have opted into keeping it.

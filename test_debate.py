@@ -58,6 +58,52 @@ class TestSplitMarker(unittest.TestCase):
                          ("argued it", True))
 
 
+class TestStances(unittest.TestCase):
+    def test_parses_two_labelled_lines(self):
+        self.assertEqual(ld.split_stances("A: ship fast\nB: test first"),
+                         ("ship fast", "test first"))
+
+    def test_tolerates_a_full_width_colon_and_stray_prose(self):
+        reply = "好的：\nA：先做功能\nB：先寫測試\n"
+        self.assertEqual(ld.split_stances(reply), ("先做功能", "先寫測試"))
+
+    def test_rejects_a_reply_missing_a_side(self):
+        self.assertIsNone(ld.split_stances("A: only one position here"))
+
+    def test_rejects_two_identical_stances(self):
+        # Not opposing positions, so not worth assigning.
+        self.assertIsNone(ld.split_stances("A: same thing\nB: same thing"))
+
+    def test_stance_is_added_to_the_system_prompt(self):
+        agent = ld.Agent("A", None, "m")
+        self.assertNotIn("assigned opening position", agent.system_prompt())
+        agent.stance = "ship fast"
+        prompt = agent.system_prompt()
+        self.assertIn("assigned opening position", prompt)
+        self.assertIn("ship fast", prompt)
+
+    def test_explicit_stances_are_assigned_and_recorded(self):
+        ld.build_agents = lambda *a, **k: (StubAgent("A", [False] * 2),
+                                           StubAgent("B", [False] * 2))
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = ld.run_debate("q", 1, 1, check=False, stances=("for", "against"))
+        self.assertEqual((r["stance_a"], r["stance_b"]), ("for", "against"))
+
+    def test_a_failed_stance_generation_does_not_stop_the_debate(self):
+        class NoStances(StubAgent):
+            def chat(self, messages, temperature=0.7, retries=3):
+                if any("opposing positions" in m["content"] for m in messages):
+                    raise RuntimeError("down")
+                return super().chat(messages, temperature, retries)
+
+        ld.build_agents = lambda *a, **k: (NoStances("A", [False] * 2),
+                                           StubAgent("B", [False] * 2))
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            r = ld.run_debate("q", 1, 1, check=False, stances=True)
+        self.assertIsNone(r["stance_a"])
+        self.assertEqual(len(r["transcript"]), 2, "the debate still ran")
+
+
 class TestShowDebate(unittest.TestCase):
     DATA = {
         "question": "q?",
