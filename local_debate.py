@@ -13,7 +13,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -192,7 +192,8 @@ class Agent:
         Re-asking for a single token is far cheaper than regenerating the whole
         turn, and temperature 0 keeps it deterministic.
         """
-        probe = messages + [
+        probe = [
+            *messages,
             {"role": "assistant", "content": answer},
             {"role": "user", "content": VERDICT_PROMPT},
         ]
@@ -528,7 +529,8 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
     except RuntimeError as exc:
         # A debate is expensive; never throw the transcript away because the
         # final summarising call happened to fail. Fall back to Agent B.
-        print(f"  ! summary via {agent_a.name} failed ({exc}); trying {agent_b.name}", file=sys.stderr)
+        print(f"  ! summary via {agent_a.name} failed ({exc}); trying {agent_b.name}",
+              file=sys.stderr)
         try:
             summary = agent_b.chat(messages, temperature=0.3)
         except RuntimeError as exc2:
@@ -566,7 +568,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Two AI agents debate a question.")
     parser.add_argument("question", nargs="?", help="the question to debate")
     parser.add_argument("--rounds", type=int, default=4, help="maximum rounds (default: 4)")
-    parser.add_argument("--min-rounds", type=int, default=2, help="rounds before convergence may end the debate")
+    parser.add_argument("--min-rounds", type=int, default=2,
+                        help="rounds before convergence may end the debate")
     parser.add_argument("--save", action="store_true", help="write the transcript to transcripts/")
     parser.add_argument("--stances", action="store_true",
                         help="start the agents on opposing positions, generated "

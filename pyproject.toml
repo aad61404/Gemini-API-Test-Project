@@ -1,0 +1,24 @@
+[tool.ruff]
+line-length = 100
+exclude = [".venv", "transcripts"]
+
+[tool.ruff.lint]
+# Pinned explicitly so CI does not change behaviour when ruff's defaults move.
+select = [
+    "E",      # pycodestyle
+    "F",      # pyflakes
+    "I",      # import order
+    "UP",     # pyupgrade
+    "B",      # bugbear
+    "SIM",    # simplify
+    "RUF",
+]
+ignore = [
+    # The prompts and fixtures are Chinese; full-width punctuation is correct
+    # there, not an ambiguous-character mistake.
+    "RUF001", "RUF002", "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures are read as data; a shared dict literal is the clearest form.
+"test_debate.py" = ["RUF012"]

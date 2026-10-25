@@ -297,17 +297,19 @@ class TestPreflight(unittest.TestCase):
             ld.preflight((self.Reachable(), self.Reachable("Agent-B (Local)")))
 
     def test_unreachable_agent_exits_nonzero(self):
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as cm:
-                ld.preflight((self.Reachable(), self.Unreachable("Agent-B (Local)")))
+        with (contextlib.redirect_stdout(io.StringIO()),
+              contextlib.redirect_stderr(io.StringIO()),
+              self.assertRaises(SystemExit) as cm):
+            ld.preflight((self.Reachable(), self.Unreachable("Agent-B (Local)")))
         self.assertEqual(cm.exception.code, 1)
 
     def test_failure_names_the_broken_agent_and_model(self):
         err = io.StringIO()
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-            with self.assertRaises(SystemExit):
-                # Not a "(Local)" agent, so this stays offline: no Ollama probe.
-                ld.preflight((self.Unreachable(),))
+        with (contextlib.redirect_stdout(io.StringIO()),
+              contextlib.redirect_stderr(err),
+              self.assertRaises(SystemExit)):
+            # Not a "(Local)" agent, so this stays offline: no Ollama probe.
+            ld.preflight((self.Unreachable(),))
         self.assertIn("missing-model", err.getvalue())
         self.assertIn("404", err.getvalue())
 

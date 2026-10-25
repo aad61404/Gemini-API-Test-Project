@@ -91,6 +91,13 @@ python show_debate.py transcripts/debate-xxx.json -o debate.md
 python -m unittest test_debate -v
 ```
 
+Lint（設定在 `pyproject.toml`，CI 會跑同一套）：
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
+```
+
 ## 量測到的行為：自報收斂有多可信？
 
 辯論迴圈信任每個 agent 自己回報「分歧是否已解決」。這份信任值多少，`bench_verdict.py`

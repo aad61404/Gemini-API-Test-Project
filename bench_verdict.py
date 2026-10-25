@@ -20,7 +20,6 @@ Needs Ollama running (and a key for --agent a or --mode judge).
 from __future__ import annotations
 
 import argparse
-import os
 
 from dotenv import load_dotenv
 

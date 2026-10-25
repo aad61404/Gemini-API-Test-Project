@@ -20,7 +20,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - run: ruff check .
 
       # The suite stubs both agents out, so it needs no API key and no
       # Ollama -- if it ever starts needing one, that is the bug.
