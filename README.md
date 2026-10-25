@@ -102,6 +102,10 @@ pip install -r requirements-dev.txt
 ruff check .
 ```
 
+## 進度
+
+目前完成到哪、還缺什麼、哪些是刻意不做的，見 [STATUS.md](STATUS.md)。
+
 ## 量測筆記
 
 這個專案的設計決定幾乎都是量出來的，不是憑直覺挑的 —— 自報收斂有多不可靠、
