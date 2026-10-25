@@ -7,6 +7,7 @@ Run with:  python -m unittest test_debate -v
 import contextlib
 import io
 import os
+import sys
 import unittest
 
 import local_debate as ld
@@ -187,6 +188,75 @@ class TestStances(unittest.TestCase):
             r = ld.run_debate("q", 1, 1, check=False, stances=True)
         self.assertIsNone(r["stance_a"])
         self.assertEqual(len(r["transcript"]), 2, "the debate still ran")
+
+
+class TestCli(unittest.TestCase):
+    """main() carries all the option plumbing and had no coverage at all."""
+
+    def setUp(self):
+        self.seen = {}
+        self._real_run = ld.run_debate
+        self._real_judge = ld.build_judge
+        self._real_argv = sys.argv
+
+        def fake_run(question, max_rounds, min_rounds, **kwargs):
+            self.seen = {"question": question, "rounds": max_rounds,
+                         "min_rounds": min_rounds, **kwargs}
+            return {"transcript": [{"round": 1, "speaker": "A", "text": "t"}],
+                    "error": None, "question": question}
+
+        ld.run_debate = fake_run
+        ld.build_judge = lambda *a, **k: "JUDGE"
+
+    def tearDown(self):
+        ld.run_debate = self._real_run
+        ld.build_judge = self._real_judge
+        sys.argv = self._real_argv
+
+    def run_cli(self, *argv):
+        sys.argv = ["local_debate.py", *argv]
+        with contextlib.redirect_stdout(io.StringIO()):
+            ld.main()
+        return self.seen
+
+    def test_defaults(self):
+        seen = self.run_cli("why?")
+        self.assertEqual((seen["question"], seen["rounds"], seen["min_rounds"]),
+                         ("why?", 4, 2))
+        self.assertIsNone(seen["judge"])
+        self.assertFalse(seen["local_only"])
+        self.assertEqual(seen["window"], 0)
+
+    def test_every_flag_reaches_run_debate(self):
+        seen = self.run_cli("why?", "--rounds", "7", "--min-rounds", "3",
+                            "--window", "2", "--local-only", "--judge",
+                            "--stream", "--no-check")
+        self.assertEqual((seen["rounds"], seen["min_rounds"], seen["window"]), (7, 3, 2))
+        self.assertEqual(seen["judge"], "JUDGE")
+        self.assertTrue(seen["local_only"])
+        self.assertTrue(seen["stream"])
+        self.assertFalse(seen["check"])
+
+    def test_explicit_stances_win_over_the_flag(self):
+        seen = self.run_cli("why?", "--stances", "--stance-a", "x", "--stance-b", "y")
+        self.assertEqual(seen["stances"], ("x", "y"))
+
+    def test_bare_stances_flag_asks_for_generated_ones(self):
+        self.assertIs(self.run_cli("why?", "--stances")["stances"], True)
+
+    def test_half_a_stance_pair_is_rejected(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.run_cli("why?", "--stance-a", "only one")
+
+    def test_a_missing_question_is_rejected(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.run_cli()
+
+    def test_a_failed_debate_exits_nonzero(self):
+        ld.run_debate = lambda *a, **k: {"transcript": [], "error": "boom"}
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stdout(io.StringIO()):
+            self.run_cli("why?")
+        self.assertEqual(cm.exception.code, 1)
 
 
 class TestShowDebate(unittest.TestCase):
