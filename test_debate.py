@@ -147,6 +147,21 @@ class TestShowDebate(unittest.TestCase):
         self.assertIn("without converging", out)
         self.assertIn("Stopped early", out)
 
+    def test_render_shows_stances_and_call_counts(self):
+        data = dict(self.DATA,
+                    stance_a="ship fast", stance_b="test first",
+                    usage={"agent_a": {"calls": 3}, "agent_b": {"calls": 2}})
+        out = show_debate.render(data)
+        self.assertIn("ship fast", out)
+        self.assertIn("test first", out)
+        self.assertIn("agent_a=3", out)
+
+    def test_render_handles_a_transcript_saved_before_those_fields_existed(self):
+        old = {k: v for k, v in self.DATA.items() if k != "judge_rulings"}
+        out = show_debate.render(old)
+        self.assertIn("## Round 1", out)
+        self.assertNotIn("Opening positions", out)
+
     def test_stats_tallies_each_speaker(self):
         out = show_debate.render_stats(self.DATA)
         self.assertIn("Agent-A", out)

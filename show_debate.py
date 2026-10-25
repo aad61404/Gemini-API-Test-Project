@@ -37,7 +37,15 @@ def render(data: dict) -> str:
     ]
     if data.get("error"):
         out.append(f"- **Stopped early**: {data['error']}")
+    if data.get("usage"):
+        calls = "  ".join(f"{who}={u['calls']}" for who, u in data["usage"].items())
+        out.append(f"- **API calls**: {calls}")
     out.append("")
+
+    if data.get("stance_a") or data.get("stance_b"):
+        out += ["**Opening positions**", "",
+                f"- A: {data.get('stance_a') or '(unassigned)'}",
+                f"- B: {data.get('stance_b') or '(unassigned)'}", ""]
 
     for ruling in data.get("judge_rulings") or []:
         if not ruling.get("ruled", True):
