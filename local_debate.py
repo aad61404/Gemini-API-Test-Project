@@ -30,9 +30,9 @@ Rules:
 - Read the other agent's last turn and engage with it directly: say what you
   accept, what you reject, and why. Do not restate your own position verbatim.
 - Do not agree just to be agreeable, and do not disagree just to seem critical.
-- End your turn with exactly one of these two markers on its own line:
-  {converged}   - if the remaining disagreement is not material
-  [OPEN]        - if a material disagreement remains
+- End your turn with a line holding only one of two markers, nothing else on
+  that line. Write {converged} if the remaining disagreement is not material,
+  and [OPEN] if a material disagreement remains.
 
 Never write the {converged} marker before you have genuinely addressed the
 other agent's strongest objection."""
@@ -78,17 +78,20 @@ Be strict. They converged too early if any of this holds:
 - one side dropped an objection without it being answered;
 - they settled on "it depends" without saying what it depends on.
 
-Reply in exactly this shape:
-<one line naming the strongest unresolved point, or "none">
-[CONVERGED] - the disagreement really is resolved
-[OPEN]      - something material is still unresolved"""
+Reply with exactly two lines:
+
+Line 1: the strongest point still unresolved, or the single word none
+Line 2: [CONVERGED] if the disagreement really is resolved, [OPEN] if
+        something material is still unresolved
+
+Line 2 must contain the marker and nothing else -- no explanation, no dash,
+no restating this instruction."""
 
 VERDICT_PROMPT = """Based on your immediately preceding answer, is any material
 disagreement still unresolved?
 
-Reply with exactly one token and nothing else:
-[CONVERGED] - no material disagreement remains
-[OPEN]      - a material disagreement remains"""
+Reply with exactly one token and nothing else: write [CONVERGED] if no
+material disagreement remains, or [OPEN] if one does. No explanation."""
 
 
 SKIPPED_NOTE = "[earlier turns omitted to keep the prompt small]"

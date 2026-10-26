@@ -7,6 +7,7 @@ Run with:  python -m unittest test_debate -v
 import contextlib
 import io
 import os
+import re
 import sys
 import unittest
 
@@ -142,6 +143,42 @@ class TestWindowed(unittest.TestCase):
         self.assertIn(ld.SKIPPED_NOTE, rendered)
         self.assertNotIn("turn 4", rendered)
         self.assertIn("turn 7", rendered)
+
+
+class TestPromptShapes(unittest.TestCase):
+    """The prompts show models what a reply looks like, so a prompt that
+    writes a marker with text after it teaches them to do the same -- and
+    split_marker then reads no verdict at all."""
+
+    # A line that opens with a marker reads as a template for the reply, so
+    # models copy it. Prose that mentions a marker mid-sentence does not.
+    TEMPLATE_LINE = re.compile(r"^\s*\[(CONVERGED|OPEN)\]\s*\S")
+
+    def assert_no_template_lines(self, prompt: str, name: str):
+        for line in prompt.splitlines():
+            with self.subTest(prompt=name, line=line):
+                self.assertIsNone(
+                    self.TEMPLATE_LINE.match(line),
+                    f"{name} shows a marker followed by text, which models copy "
+                    f"verbatim and split_marker then cannot read: {line!r}")
+
+    def test_judge_prompt_shows_no_copyable_template_line(self):
+        # Regression: it used to show "[CONVERGED] - the disagreement really is
+        # resolved", which the judge copied verbatim, so every approval was
+        # read as no verdict and silently deferred to the agents.
+        self.assert_no_template_lines(ld.JUDGE_PROMPT, "JUDGE_PROMPT")
+
+    def test_verdict_prompt_shows_no_copyable_template_line(self):
+        self.assert_no_template_lines(ld.VERDICT_PROMPT, "VERDICT_PROMPT")
+
+    def test_system_prompt_shows_no_copyable_template_line(self):
+        self.assert_no_template_lines(
+            ld.SYSTEM_PROMPT.format(name="A", converged=ld.CONVERGED), "SYSTEM_PROMPT")
+
+    def test_the_echoed_template_shape_is_still_treated_as_no_verdict(self):
+        # The parser must not start guessing; the prompt is what got fixed.
+        _, verdict = ld.split_marker("none\n[CONVERGED] - the disagreement is resolved")
+        self.assertIsNone(verdict)
 
 
 class TestStances(unittest.TestCase):
