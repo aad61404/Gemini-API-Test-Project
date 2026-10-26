@@ -11,10 +11,10 @@ Agent A 走 Gemini 雲端 API、Agent B 走本機 Ollama，兩邊都用同一套
 | 項目 | 狀態 |
 |---|---|
 | 核心辯論迴圈 | ✅ 可用，已多次實跑 |
-| 測試 | ✅ 71 個，不需要 API key 或 Ollama |
+| 測試 | ✅ 81 個，不需要 API key 或 Ollama |
 | CI | ✅ GitHub Actions，Python 3.11 / 3.13，含 ruff lint |
 | 文件 | ✅ README（怎麼用）+ FINDINGS（量到什麼） |
-| 程式碼 | `local_debate.py` 694 行、`test_debate.py` 661 行 |
+| 程式碼 | `local_debate.py` 694 行、測試 661 + 190 行 |
 
 ## 已完成
 
@@ -56,8 +56,9 @@ Agent A 走 Gemini 雲端 API、Agent B 走本機 Ollama，兩邊都用同一套
    純整理，無新功能，有改壞的風險。
 2. **裁判的量測樣本太少** —— 只在一個問題上測過（兩案例各 10 次）。要更有把握
    需要換幾個不同領域的問題，但會吃掉雲端額度。
-3. **沒有端對端的真實模型測試** —— CI 沒有 Ollama 也沒有 API key，所以 71 個測試
-   全部是替身。真實行為只能靠手動實跑驗證。
+3. **沒有對真實模型的測試** —— CI 沒有 Ollama 也沒有 API key。SDK 這層已由
+   `test_wire.py` 對假 server 覆蓋（請求格式、串流、usage、429），但「模型實際會
+   怎麼回答」仍然只能靠手動實跑驗證。
 
 ### 已知限制（不打算修，或修不了）
 

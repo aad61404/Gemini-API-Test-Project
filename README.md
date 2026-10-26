@@ -89,11 +89,15 @@ python show_debate.py transcripts/debate-xxx.json -o debate.md
 
 ## 測試
 
-不需要 API key 也能跑（標記解析與收斂規則）：
+不需要 API key、也不需要 Ollama：
 
 ```bash
-python -m unittest test_debate -v
+python -m unittest discover -v
 ```
+
+- `test_debate.py` —— 標記解析、收斂規則、CLI 接線（agent 以替身取代）
+- `test_wire.py` —— 對一個假的 OpenAI 相容 HTTP server 跑真正的 `openai` SDK：
+  請求長什麼樣、串流怎麼組回來、usage 從哪來、429 怎麼分辨
 
 Lint（設定在 `pyproject.toml`，CI 會跑同一套）：
 
