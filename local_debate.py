@@ -78,14 +78,14 @@ Be strict. They converged too early if any of this holds:
 - one side dropped an objection without it being answered;
 - they settled on "it depends" without saying what it depends on.
 
-Reply with exactly two lines:
+Start by naming, in one sentence, the strongest point that is still
+unresolved. If nothing material is unresolved, write only the word none.
+This sentence is quoted back to the agents, so write it to them, and do not
+label it or repeat these instructions in it.
 
-Line 1: the strongest point still unresolved, or the single word none
-Line 2: [CONVERGED] if the disagreement really is resolved, [OPEN] if
-        something material is still unresolved
-
-Line 2 must contain the marker and nothing else -- no explanation, no dash,
-no restating this instruction."""
+Then finish with a line that holds only a marker and nothing else. The marker
+is [CONVERGED] when the disagreement really is resolved, and it is [OPEN] when
+something material is still unresolved."""
 
 VERDICT_PROMPT = """Based on your immediately preceding answer, is any material
 disagreement still unresolved?
@@ -395,7 +395,27 @@ def judge_convergence(judge: Agent, question: str,
         print("  ! judge gave no verdict; accepting the agents' own verdict",
               file=sys.stderr, flush=True)
         return True, "judge gave no verdict", False
+    # Keep the judge's own words in the record; sanitising happens where the
+    # note is quoted back to the agents, not where it is reported.
     return verdict, note.strip(), True
+
+
+# A marker or an instruction label left in the note means the reply was not
+# the shape it was asked for: the model echoed the instructions instead of
+# writing an objection.
+ANY_MARKER_RE = re.compile(r"\[(CONVERGED|OPEN)\]")
+LABEL_RE = re.compile(r"(?mi)^\s*line\s*\d+\s*[:：]\s*")
+GENERIC_OBJECTION = "something material is still unresolved -- identify it and address it"
+
+
+def as_objection(note: str) -> str:
+    """Turn a judge's note into something worth quoting at the debaters.
+
+    Quoting echoed instructions at them is worse than saying nothing, so an
+    unusable note becomes a generic objection rather than noise.
+    """
+    cleaned = LABEL_RE.sub("", ANY_MARKER_RE.sub("", note)).strip()
+    return cleaned if len(cleaned) >= 8 and cleaned.lower() != "none" else GENERIC_OBJECTION
 
 
 STANCE_LINE_RE = re.compile(r"(?mi)^\s*([AB])\s*[:：]\s*(.+?)\s*$")
@@ -561,9 +581,10 @@ def run_debate(question: str, max_rounds: int, min_rounds: int, check: bool = Tr
 
             # Put the objection back into the debate rather than silently
             # continuing, so the next round has something to answer.
-            print(f"\n>>> Judge overruled the convergence: {note}")
+            complaint = as_objection(note)
+            print(f"\n>>> Judge overruled the convergence: {complaint}")
             objection = (f"You both declared you were done, but this is still "
-                         f"unresolved:\n{note}\nAddress it directly.")
+                         f"unresolved:\n{complaint}\nAddress it directly.")
             transcript.append(("Judge", objection))
             turns.append({"round": rnd, "speaker": "Judge",
                           "verdict": False, "text": objection})

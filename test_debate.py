@@ -175,6 +175,17 @@ class TestPromptShapes(unittest.TestCase):
         self.assert_no_template_lines(
             ld.SYSTEM_PROMPT.format(name="A", converged=ld.CONVERGED), "SYSTEM_PROMPT")
 
+    def test_an_echoed_note_is_not_quoted_at_the_debaters(self):
+        # The judge once answered "Line 1: [CONVERGED]\nLine 2:", which would
+        # have been injected into the debate as the objection to address.
+        for echoed in ("Line 1: [OPEN]\nLine 2:", "[OPEN]", "none", "", "Line 2:"):
+            with self.subTest(note=echoed):
+                self.assertEqual(ld.as_objection(echoed), ld.GENERIC_OBJECTION)
+
+    def test_a_real_note_is_passed_through_unchanged(self):
+        note = "Agent-A 沒有回答 CI 時間成長的成本由誰吸收"
+        self.assertEqual(ld.as_objection(note), note)
+
     def test_the_echoed_template_shape_is_still_treated_as_no_verdict(self):
         # The parser must not start guessing; the prompt is what got fixed.
         _, verdict = ld.split_marker("none\n[CONVERGED] - the disagreement is resolved")
