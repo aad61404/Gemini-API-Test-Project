@@ -11,7 +11,7 @@ Agent A 走 Gemini 雲端 API、Agent B 走本機 Ollama，兩邊都用同一套
 | 項目 | 狀態 |
 |---|---|
 | 核心辯論迴圈 | ✅ 可用，已多次實跑 |
-| 測試 | ✅ 85 個，不需要 API key 或 Ollama |
+| 測試 | ✅ 89 個，不需要 API key 或 Ollama |
 | CI | ✅ GitHub Actions，Python 3.11 / 3.13，含 ruff lint |
 | 文件 | ✅ README（怎麼用）+ FINDINGS（量到什麼） |
 | 程式碼 | `local_debate.py` 694 行、測試 661 + 190 行 |
@@ -52,8 +52,10 @@ Agent A 走 Gemini 雲端 API、Agent B 走本機 Ollama，兩邊都用同一套
 
 ### 想做但還沒做
 
-1. **`local_debate.py` 拆模組** —— 694 行混了 agent、辯論流程、CLI 三個關注點。
-   純整理，無新功能，有改壞的風險。
+1. ~~`local_debate.py` 拆模組~~ —— **決定不做**。測試是用 monkeypatch 替換模組
+   屬性（`ld.build_agents`、`ld.run_debate`）；一旦拆開，`run_debate` 會持有自己
+   import 的參考，patch 門面模組就失效。這是確定會發生的語意改變，而收益只是
+   版面更整齊。單一檔案 700 行、關注點內聚，留著。
 2. ~~裁判的量測樣本太少~~ —— 已擴充到三個領域（測試策略／面試／monorepo）各
    兩種案例，共 12 次取樣全對。樣本仍然不大（受每日 20 次額度限制），但不再是
    單一問題的結果。

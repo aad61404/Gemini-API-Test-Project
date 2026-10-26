@@ -204,6 +204,18 @@ class TestStances(unittest.TestCase):
     def test_rejects_a_reply_missing_a_side(self):
         self.assertIsNone(ld.split_stances("A: only one position here"))
 
+    def test_rejects_echoed_placeholders(self):
+        # The prompt used to show "A: <first position>", and a stance goes
+        # straight into a system prompt -- an agent would argue the placeholder.
+        self.assertIsNone(ld.split_stances("A: <first position>\nB: <opposing position>"))
+        self.assertIsNone(ld.split_stances("A: [your position]\nB: [the other one]"))
+
+    def test_a_short_chinese_stance_is_still_a_stance(self):
+        # Four characters is a complete position; any English-tuned length
+        # threshold would throw it away.
+        self.assertEqual(ld.split_stances("A: 先做功能\nB: 先寫測試"),
+                         ("先做功能", "先寫測試"))
+
     def test_rejects_two_identical_stances(self):
         # Not opposing positions, so not worth assigning.
         self.assertIsNone(ld.split_stances("A: same thing\nB: same thing"))

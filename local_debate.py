@@ -55,9 +55,9 @@ Rules:
 - Each is one sentence, stating what to actually do and the core reason.
 - No hedging, no "it depends", no restating the question.
 
-Reply with exactly two lines and nothing else:
-A: <first position>
-B: <opposing position>"""
+Reply with exactly two lines and nothing else. Begin the first line with
+"A: " and the second with "B: ", and write the position itself after the
+label -- not a description of what belongs there."""
 
 SUMMARY_PROMPT = """Below is a debate transcript between two agents.
 
@@ -419,14 +419,29 @@ def as_objection(note: str) -> str:
 
 
 STANCE_LINE_RE = re.compile(r"(?mi)^\s*([AB])\s*[:：]\s*(.+?)\s*$")
+# "<first position>", "[your position here]" -- the shape of a copied example.
+PLACEHOLDER_RE = re.compile(r"[<>]|^\[.*\]$")
+
+
+def usable_stance(text: str) -> bool:
+    """Reject an echoed placeholder before it becomes an agent's position.
+
+    A stance goes straight into a system prompt, so "<first position>" would
+    be argued as though it meant something. Length is deliberately not a
+    quality bar: a complete Chinese position fits in four characters, so any
+    threshold tuned on English would reject real stances.
+    """
+    return len(text) >= 2 and not PLACEHOLDER_RE.search(text)
 
 
 def split_stances(text: str) -> tuple[str, str] | None:
     """Pull 'A: ...' and 'B: ...' out of the model's reply, or None."""
     found = {label.upper(): body for label, body in STANCE_LINE_RE.findall(text)}
-    if "A" in found and "B" in found and found["A"] != found["B"]:
-        return found["A"], found["B"]
-    return None
+    if not {"A", "B"} <= found.keys() or found["A"] == found["B"]:
+        return None
+    if not all(usable_stance(found[label]) for label in ("A", "B")):
+        return None
+    return found["A"], found["B"]
 
 
 def assign_stances(author: Agent, question: str) -> tuple[str, str] | None:
